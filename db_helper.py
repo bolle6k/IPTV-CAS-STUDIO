@@ -213,36 +213,73 @@ class DBHelper:
             rows = c.fetchall()
             return [row[0] for row in rows] if rows else []
 
-    # Abonnement
-    def add_subscription(self, username, paket, start_date, end_date, active=1, canceled=0):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled) VALUES (?, ?, ?, ?, ?, ?)',
-                      (username, paket, start_date, end_date, active, canceled))
-            conn.commit()
-
-    def add_or_extend_subscription(self, username, paket, zyklus_tage):
+    # Abonnement mit Upgrade/Downgrade Logik
+    def add_or_upgrade_subscription(self, username, paket, zyklus_tage):
         heute = datetime.datetime.utcnow().date()
+        paket_prioritaet = {'Basis': 1, 'Basis+': 2, 'Premium': 3}
         with self.lock, sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
+
+            # Alle aktiven Abos holen
             c.execute('''
-                SELECT id, end_date FROM subscriptions
-                WHERE username = ? AND paket = ? AND active = 1 AND canceled = 0 AND DATE(end_date) >= DATE(?)
-                ORDER BY end_date DESC LIMIT 1
-            ''', (username, paket, heute.isoformat()))
-            row = c.fetchone()
-            if row:
-                abo_id, end_date_str = row
-                end_date = datetime.datetime.fromisoformat(end_date_str).date()
-                neuer_ablauf = end_date + datetime.timedelta(days=zyklus_tage)
-                c.execute('UPDATE subscriptions SET end_date = ? WHERE id = ?', (neuer_ablauf.isoformat(), abo_id))
+                SELECT id, paket, start_date, end_date FROM subscriptions
+                WHERE username = ? AND active = 1 AND canceled = 0
+            ''', (username,))
+            aktive_abos = c.fetchall()
+
+            # Höchstes Paket finden
+            current_highest = None
+            for abo in aktive_abos:
+                if not current_highest or paket_prioritaet[abo[1]] > paket_prioritaet[current_highest[1]]:
+                    current_highest = abo
+
+            if current_highest:
+                if paket_prioritaet[paket] > paket_prioritaet[current_highest[1]]:
+                    # Neues Paket höherwertig: neues Paket sofort aktiv, altes Abo deaktivieren
+                    start_date = heute.isoformat()
+                    end_date = heute + datetime.timedelta(days=zyklus_tage)
+                    c.execute('UPDATE subscriptions SET active = 0 WHERE id = ?', (current_highest[0],))
+                    c.execute('''
+                        INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
+                        VALUES (?, ?, ?, ?, 1, 0)
+                    ''', (username, paket, start_date, end_date.isoformat()))
+                elif paket_prioritaet[paket] == paket_prioritaet[current_highest[1]]:
+                    # Gleiches Paket verlängern
+                    c.execute('''
+                        SELECT id, end_date FROM subscriptions
+                        WHERE username = ? AND paket = ? AND active = 1 AND canceled = 0
+                    ''', (username, paket))
+                    row = c.fetchone()
+                    if row:
+                        abo_id, end_date_str = row
+                        end_date = datetime.datetime.fromisoformat(end_date_str).date()
+                        neuer_ablauf = end_date + datetime.timedelta(days=zyklus_tage)
+                        c.execute('UPDATE subscriptions SET end_date = ? WHERE id = ?', (neuer_ablauf.isoformat(), abo_id))
+                    else:
+                        start_date = heute.isoformat()
+                        end_date = heute + datetime.timedelta(days=zyklus_tage)
+                        c.execute('''
+                            INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
+                            VALUES (?, ?, ?, ?, 1, 0)
+                        ''', (username, paket, start_date, end_date.isoformat()))
+                else:
+                    # Niedrigeres Paket planen (active=0, startet nach Ablauf des höchsten Pakets)
+                    end_date_str = current_highest[3]
+                    start_date = datetime.datetime.fromisoformat(end_date_str).date() + datetime.timedelta(days=1)
+                    end_date = start_date + datetime.timedelta(days=zyklus_tage)
+                    c.execute('''
+                        INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
+                        VALUES (?, ?, ?, ?, 0, 0)
+                    ''', (username, paket, start_date.isoformat(), end_date.isoformat()))
             else:
+                # Kein aktives Abo: neues Abo sofort aktiv anlegen
                 start_date = heute.isoformat()
                 end_date = heute + datetime.timedelta(days=zyklus_tage)
                 c.execute('''
                     INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
                     VALUES (?, ?, ?, ?, 1, 0)
                 ''', (username, paket, start_date, end_date.isoformat()))
+
             conn.commit()
 
     def cancel_subscription(self, username, paket=None):
@@ -263,26 +300,16 @@ class DBHelper:
                 ''', (username, heute))
             conn.commit()
 
-    def get_active_subscription(self, username):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('''
-                SELECT * FROM subscriptions
-                WHERE username = ? AND active = 1 AND canceled = 0
-                ORDER BY end_date DESC LIMIT 1
-            ''', (username,))
-            return c.fetchone()
-
     def get_active_subscriptions(self, username):
         heute = datetime.datetime.utcnow().date()
         with self.lock, sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
             c.execute('''
-                SELECT id, paket, start_date, end_date, canceled FROM subscriptions
-                WHERE username = ? AND active = 1 AND (canceled = 0 OR (canceled = 1 AND DATE(end_date) >= DATE(?)))
+                SELECT id, paket, start_date, end_date, canceled, active FROM subscriptions
+                WHERE username = ? AND (active = 1 OR (active = 0 AND canceled = 0))
                   AND DATE(end_date) >= DATE(?)
                 ORDER BY end_date DESC
-            ''', (username, heute.isoformat(), heute.isoformat()))
+            ''', (username, heute.isoformat()))
             return c.fetchall()
 
     def has_active_subscription(self, username):
@@ -291,9 +318,8 @@ class DBHelper:
             c = conn.cursor()
             c.execute('''
                 SELECT COUNT(*) FROM subscriptions
-                WHERE username = ? AND active = 1 AND (canceled = 0 OR (canceled = 1 AND DATE(end_date) >= DATE(?)))
-                  AND DATE(end_date) >= DATE(?)
-            ''', (username, heute.isoformat(), heute.isoformat()))
+                WHERE username = ? AND active = 1 AND canceled = 0 AND DATE(end_date) >= DATE(?)
+            ''', (username, heute.isoformat()))
             result = c.fetchone()
             return result[0] > 0 if result else False
 
@@ -303,13 +329,12 @@ class DBHelper:
         with self.lock, sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
             c.execute('''
-                SELECT paket, start_date, end_date, canceled FROM subscriptions
-                WHERE username = ? AND active = 1 AND (canceled = 0 OR (canceled = 1 AND DATE(end_date) >= DATE(?)))
-                  AND DATE(end_date) >= DATE(?)
-            ''', (username, heute.isoformat(), heute.isoformat()))
+                SELECT paket, start_date, end_date, canceled, active FROM subscriptions
+                WHERE username = ? AND active = 1 AND canceled = 0 AND DATE(end_date) >= DATE(?)
+            ''', (username, heute.isoformat()))
             abos = c.fetchall()
-            gueltige_abos = [a for a in abos if datetime.datetime.fromisoformat(a[2]).date() >= heute]
-            if not gueltige_abos:
+            if not abos:
                 return 'Kein Abo'
-            bestes = max(gueltige_abos, key=lambda a: paket_prioritaet.get(a[0], 0))
+            # Höchste Priorität wählen
+            bestes = max(abos, key=lambda a: paket_prioritaet.get(a[0], 0))
             return bestes[0]

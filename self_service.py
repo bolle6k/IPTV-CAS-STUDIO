@@ -31,13 +31,16 @@ SELF_SERVICE_TEMPLATE = '''
 {% if user %}
   <p><b>Benutzername:</b> {{ user[0] }}</p>
   <p><b>HWID:</b> {{ user[1] }}</p>
-  <p><b>Bestes aktives Paket:</b> {{ best_paket }}</p>
+  <p><b>Aktives Paket:</b> {{ best_paket }}</p>
 
   {% if active_subscriptions %}
-    <h3>Aktive Abonnements:</h3>
+    <h3>Abonnements (inkl. Warteschlange):</h3>
     <ul>
     {% for abo in active_subscriptions %}
-      <li>{{ abo[1] }} - gültig bis {{ abo[3] }} ({{ abo[4] }} Tage Restlaufzeit)</li>
+      <li>
+        {{ abo[1] }} - gültig von {{ abo[2] }} bis {{ abo[3] }}
+        ({{ abo[5] }} Tage Restlaufzeit) {% if abo[4] == 1 %}(Aktiv){% else %}(In Warteschlange){% endif %}
+      </li>
     {% endfor %}
     </ul>
   {% else %}
@@ -72,7 +75,7 @@ SELF_SERVICE_TEMPLATE = '''
     <input type="hidden" name="username" value="{{ user[0] }}">
     <label for="cancel_paket">Paket kündigen:</label>
     <select name="cancel_paket" id="cancel_paket" required>
-      {% for abo in active_subscriptions %}
+      {% for abo in active_subscriptions if abo[4] == 1 %}
         <option value="{{ abo[1] }}">{{ abo[1] }}</option>
       {% endfor %}
     </select>
@@ -115,11 +118,12 @@ def selfservice():
         return render_template_string(SELF_SERVICE_TEMPLATE, user=None, error="Benutzer nicht gefunden", prices=config.PRICES)
 
     best_paket = db.get_best_active_package(username)
-    active_abos = db.get_active_subscriptions(username)
+    abos = db.get_active_subscriptions(username)
     active_subscriptions = []
-    for abo in active_abos:
+    for abo in abos:
         resttage = calculate_remaining_days(abo[3])
-        active_subscriptions.append((abo[0], abo[1], abo[2], abo[3], resttage))
+        # abo: (id, paket, start_date, end_date, canceled, active)
+        active_subscriptions.append((abo[0], abo[1], abo[2], abo[3], abo[4], abo[5], resttage))
 
     return render_template_string(SELF_SERVICE_TEMPLATE,
                                   user=user,
@@ -140,7 +144,7 @@ def subscribe():
     zyklus_map = {'1m': 30, '6m': 180, '12m': 365}
     zyklus_tage = zyklus_map.get(zyklus, 30)
 
-    db.add_or_extend_subscription(username, paket, zyklus_tage)
+    db.add_or_upgrade_subscription(username, paket, zyklus_tage)
 
     flash(f"Paket {paket} gebucht/verlängert für {zyklus_tage} Tage.", "success")
     return redirect(url_for('selfservice'))

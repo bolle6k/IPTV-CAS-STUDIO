@@ -71,11 +71,12 @@ def authenticate():
 
     log_request(user[0], 'authenticate', True, ip=request.remote_addr)
 
-    ecm_key = db.get_valid_key_for_user(user[0])
-    if not ecm_key:
+    keys = db.get_valid_keys_for_user(user[0])
+    if not keys:
         abo = db.get_active_subscription(user[0])
         valid_until = abo[4] if abo else (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat()
-        ecm_key = create_key_for_user(user[0], user[2], valid_until)
+        key = create_key_for_user(user[0], user[2], valid_until)
+        keys = [key]
 
     return jsonify({
         'status': 'ok',
@@ -86,7 +87,7 @@ def authenticate():
             'token': user[3],
             'email': user[4]
         },
-        'keys': [ecm_key]
+        'keys': keys
     })
 
 @app.route('/api/stream_info', methods=['GET'])
@@ -108,17 +109,18 @@ def stream_info():
         log_request(user[0], 'stream_info', False)
         abort(403, "Subscription expired or inactive")
 
-    ecm_key = db.get_valid_key_for_user(user[0])
-    if not ecm_key:
+    keys = db.get_valid_keys_for_user(user[0])
+    if not keys:
         abo = db.get_active_subscription(user[0])
         valid_until = abo[4] if abo else (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat()
-        ecm_key = create_key_for_user(user[0], user[2], valid_until)
+        key = create_key_for_user(user[0], user[2], valid_until)
+        keys = [key]
 
     log_request(user[0], 'stream_info')
 
     stream_data = {
         'stream_url': 'https://example.com/hls/stream.m3u8',
-        'aes_key': ecm_key,
+        'aes_keys': keys,
         'watermark': 'UserWatermark123',
         'logo_url': 'https://example.com/logos/logo.png'
     }
