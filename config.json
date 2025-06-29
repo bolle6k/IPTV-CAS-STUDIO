@@ -1,0 +1,32 @@
+{
+    "HOST": "127.0.0.1",
+    "PORT_API": 6060,
+    "PORT_ADMIN": 5000,
+    "PORT_SELF_SERVICE": 7000,
+    "MASTER_KEY": "supersecretmasterkey123",
+    "API_SECRET_KEY": "supersecretapikey123",
+    "DB_PATH": "iptv_users.db",
+    "LOG_FILE": "admin_events.log",
+    "KEYS_DIR": "keys",
+    "REDIS_HOST": "localhost",
+    "REDIS_PORT": 6379,
+    "BASE_STREAM_URL": "https://stream.example.com/",
+    "ROTATION_INTERVAL": 3600,
+    "PRICES": {
+        "Basis": {
+            "1m": 10,
+            "6m": 55,
+            "12m": 100
+        },
+        "Basis+": {
+            "1m": 15,
+            "6m": 80,
+            "12m": 150
+        },
+        "Premium": {
+            "1m": 20,
+            "6m": 110,
+            "12m": 210
+        }
+    }
+}
