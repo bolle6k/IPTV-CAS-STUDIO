@@ -126,6 +126,12 @@ class DBHelper:
         with self.lock, sqlite3.connect(self.db_path) as conn:
             return conn.execute(query, params).fetchall()
 
+    def get_all_users(self):
+        with self.lock, sqlite3.connect(self.db_path) as conn:
+            return conn.execute(
+                'SELECT username,hwid,paket,token,email FROM users'
+            ).fetchall()
+
     def update_user_details(self, username, paket, hwid, email):
         with self.lock, sqlite3.connect(self.db_path) as conn:
             conn.execute('''
@@ -183,7 +189,6 @@ class DBHelper:
         return bool(self.get_active_subscriptions(username))
 
     def get_best_active_package(self, username):
-        # Reihenfolge Premium > Basis+ > Basis
         rank = {'Premium':3, 'Basis+':2, 'Basis':1}
         subs = self.get_active_subscriptions(username)
         best = None
