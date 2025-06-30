@@ -76,8 +76,115 @@ def restore_backup_file(backup_file):
 
 # --- Template gekürzt; bleibt unverändert ---
 TEMPLATE = '''<!doctype html>
-... (dein vollständiges HTML-Template hier) ...
-'''
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thunder IPTV CAS – Admin Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.4.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: #fff;
+    }
+    .navbar-brand {
+      font-weight: bold;
+      font-size: 1.5rem;
+      letter-spacing: 1px;
+    }
+    .card {
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .footer {
+      margin-top: 2rem;
+      text-align: center;
+      font-size: 0.9rem;
+      color: rgba(255,255,255,0.6);
+    }
+    h2, h3 {
+      color: #ffd700;
+    }
+    .btn-thunder {
+      background: #ff6f61;
+      border: none;
+      color: #fff;
+    }
+    .btn-thunder:hover {
+      background: #ff3b2e;
+    }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="{{ url_for('admin') }}">⚡️ Thunder IPTV CAS</a>
+    <div class="d-flex">
+      <a href="{{ url_for('logout') }}" class="btn btn-outline-light">Logout</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+
+  <div class="card p-4 mb-4 bg-light text-dark">
+    <h2>Benutzerverwaltung</h2>
+    <!-- hier kommt dein Filter-Form und User-Tabelle rein wie gehabt -->
+    {{ /* deine bestehende Benutzerverwaltung-Tabellen-HTML */ }}
+  </div>
+
+  <div class="card p-4 mb-4 bg-light text-dark">
+    <h3>Watermark & DRM Logo Verwaltung</h3>
+    <!-- dein Watermark-Form und Tabelle -->
+    {{ /* Watermark-Upload und Liste */ }}
+  </div>
+
+  <div class="card p-4 mb-4 bg-light text-dark">
+    <h3>ECM / EMM Schlüssel</h3>
+    <!-- deine Schlüssel-Tabelle -->
+    {{ /* ECM/EMM-Tabelle */ }}
+    <form method="post" action="{{ url_for('rotate_key') }}">
+      <button class="btn btn-thunder">🔁 Manuelle Rotation</button>
+    </form>
+  </div>
+
+  <div class="card p-4 mb-4 bg-light text-dark">
+    <h3>Backup & Restore</h3>
+    <form method="post" action="{{ url_for('trigger_backup') }}" class="mb-2">
+      <button class="btn btn-success">Backup erstellen</button>
+    </form>
+    {% if last_backup %}
+      <a href="{{ url_for('download_backup', filename=last_backup) }}" class="btn btn-primary mb-2">Backup herunterladen</a>
+    {% endif %}
+    <form method="post" action="{{ url_for('restore_backup') }}" enctype="multipart/form-data">
+      <input type="file" name="backup_file" accept=".zip" required class="form-control mb-2">
+      <button class="btn btn-warning">Backup wiederherstellen</button>
+    </form>
+  </div>
+
+  <div class="card p-4 mb-4 bg-light text-dark">
+    <h3>Live Logs</h3>
+    <pre id="logArea" style="background:#000; color:#0f0; padding:1rem; height:200px; overflow:auto;"></pre>
+  </div>
+
+  <div class="footer">
+    &copy; 2025 Produkt “Thunder” – Robert Schilke
+  </div>
+</div>
+
+<script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+  var socket = io();
+  socket.on('log_update', function(data) {
+    const logArea = document.getElementById('logArea');
+    logArea.textContent += data.msg + "\\n";
+    logArea.scrollTop = logArea.scrollHeight;
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.4.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>'''
+
 
 @app.route("/")
 def index():
