@@ -24,11 +24,11 @@ PER_PAGE = 50
 KEY_ROTATION_INTERVAL = config.ROTATION_INTERVAL
 last_key_rotation = datetime.datetime.now(datetime.timezone.utc)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-
 BACKUP_DIR = "./backups"
 DB_PATH = config.DB_PATH
 KEYS_DIR = config.KEYS_DIR
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -53,12 +53,11 @@ def create_backup():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_name = f"iptv_backup_{timestamp}.zip"
     backup_path = os.path.join(BACKUP_DIR, backup_name)
-
     with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         if os.path.exists(DB_PATH):
             zipf.write(DB_PATH, os.path.basename(DB_PATH))
         if os.path.isdir(KEYS_DIR):
-            for foldername, subfolders, filenames in os.walk(KEYS_DIR):
+            for foldername, _, filenames in os.walk(KEYS_DIR):
                 for filename in filenames:
                     filepath = os.path.join(foldername, filename)
                     arcname = os.path.relpath(filepath, start='.')
@@ -74,7 +73,6 @@ def restore_backup_file(backup_file):
     log_event("Backup wiederhergestellt", "system")
     return True
 
-# --- Template gekürzt; bleibt unverändert ---
 TEMPLATE = '''<!doctype html>
 <html lang="de">
 <head>
@@ -129,20 +127,128 @@ TEMPLATE = '''<!doctype html>
 
   <div class="card p-4 mb-4 bg-light text-dark">
     <h2>Benutzerverwaltung</h2>
-    <!-- hier kommt dein Filter-Form und User-Tabelle rein wie gehabt -->
-    {{ /* deine bestehende Benutzerverwaltung-Tabellen-HTML */ }}
+    <form method="get" class="row g-3 mb-3 align-items-center">
+      <div class="col-auto"><label for="paket" class="col-form-label">Paket-Filter</label></div>
+      <div class="col-auto">
+        <select id="paket" name="paket" class="form-select">
+          <option value="" {% if not paket_filter %}selected{% endif %}>Alle</option>
+          <option value="Basis" {% if paket_filter=='Basis' %}selected{% endif %}>Basis</option>
+          <option value="Basis+" {% if paket_filter=='Basis+' %}selected{% endif %}>Basis+</option>
+          <option value="Premium" {% if paket_filter=='Premium' %}selected{% endif %}>Premium</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <input type="text" name="hwid_filter" class="form-control" placeholder="HWID" value="{{ hwid_filter }}">
+      </div>
+      <div class="col-auto">
+        <input type="text" name="token_filter" class="form-control" placeholder="Token" value="{{ token_filter }}">
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">Filter anwenden</button>
+      </div>
+    </form>
+    <div class="table-responsive">
+      <table class="table table-striped table-hover align-middle">
+        <thead class="table-dark">
+          <tr><th>Username</th><th>HWID</th><th>Paket</th><th>Token</th><th>Email</th><th>Aktionen</th></tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u[0] }}</td>
+            <td>{{ u[1] }}</td>
+            <td>{{ u[2] }}</td>
+            <td><code>{{ u[3] }}</code></td>
+            <td>{{ u[4] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_user') }}" class="d-inline" onsubmit="return confirm('Benutzer wirklich löschen?');">
+                <input type="hidden" name="username" value="{{ u[0] }}">
+                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+              </form>
+              <form method="post" action="{{ url_for('edit_user') }}" class="d-inline">
+                <input type="hidden" name="username" value="{{ u[0] }}">
+                <select name="paket" class="form-select form-select-sm d-inline w-auto">
+                  <option value="Basis" {% if u[2]=='Basis' %}selected{% endif %}>Basis</option>
+                  <option value="Basis+" {% if u[2]=='Basis+' %}selected{% endif %}>Basis+</option>
+                  <option value="Premium" {% if u[2]=='Premium' %}selected{% endif %}>Premium</option>
+                </select>
+                <input type="text" name="hwid" value="{{ u[1] }}" size="15" class="form-control form-control-sm d-inline w-auto" required>
+                <input type="email" name="email" value="{{ u[4] }}" size="20" class="form-control form-control-sm d-inline w-auto">
+                <button type="submit" class="btn btn-sm btn-success">Aktualisieren</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if total_pages>1 %}
+    <nav><ul class="pagination justify-content-center">
+      <li class="page-item {% if page==1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('admin', paket=paket_filter, hwid_filter=hwid_filter, token_filter=token_filter, page=page-1) }}">←</a></li>
+      <li class="page-item disabled"><a class="page-link">Seite {{ page }} / {{ total_pages }}</a></li>
+      <li class="page-item {% if page==total_pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('admin', paket=paket_filter, hwid_filter=hwid_filter, token_filter=token_filter, page=page+1) }}">→</a></li>
+    </ul></nav>
+    {% endif %}
   </div>
 
   <div class="card p-4 mb-4 bg-light text-dark">
     <h3>Watermark & DRM Logo Verwaltung</h3>
-    <!-- dein Watermark-Form und Tabelle -->
-    {{ /* Watermark-Upload und Liste */ }}
+    <form method="post" action="{{ url_for('upload_watermark') }}" enctype="multipart/form-data" class="mb-3">
+      <div class="mb-2"><label class="form-label">Name</label><input type="text" name="name" class="form-control" required></div>
+      <div class="mb-2"><label class="form-label">Datei</label><input type="file" name="file" accept="image/*" class="form-control" required></div>
+      <div class="mb-2"><label class="form-label">Position</label>
+        <select name="position" class="form-select">
+          <option value="top-left">Oben Links</option>
+          <option value="top-right">Oben Rechts</option>
+          <option value="bottom-left">Unten Links</option>
+          <option value="bottom-right" selected>Unten Rechts</option>
+        </select>
+      </div>
+      <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="visible" checked><label class="form-check-label">Sichtbar</label></div>
+      <button class="btn btn-primary">Hochladen</button>
+    </form>
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle">
+        <thead class="table-light"><tr><th>ID</th><th>Name</th><th>Bild</th><th>Position</th><th>Sichtbar</th><th>Aktion</th></tr></thead>
+        <tbody>
+          {% for wm in watermarks %}
+          <tr>
+            <td>{{ wm[0] }}</td>
+            <td>{{ wm[1] }}</td>
+            <td><img src="{{ url_for('static', filename=wm[2].split('static/')[-1]) }}" style="max-height:40px;"></td>
+            <td>{{ wm[3] }}</td>
+            <td>{{ 'Ja' if wm[4] else 'Nein' }}</td>
+            <td>
+              <form method="post" action="{{ url_for('toggle_watermark') }}" class="d-inline">
+                <input type="hidden" name="wm_id" value="{{ wm[0] }}">
+                <input type="hidden" name="visible" value="{{ 0 if wm[4] else 1 }}">
+                <button class="btn btn-sm btn-outline-secondary">{{ 'Deaktivieren' if wm[4] else 'Aktivieren' }}</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div class="card p-4 mb-4 bg-light text-dark">
     <h3>ECM / EMM Schlüssel</h3>
-    <!-- deine Schlüssel-Tabelle -->
-    {{ /* ECM/EMM-Tabelle */ }}
+    <table class="table table-striped table-sm">
+      <thead class="table-dark"><tr><th>Typ</th><th>Key</th><th>Erstellt</th><th>User</th><th>Paket</th></tr></thead>
+      <tbody>
+        {% for e in ecm_emm_records %}
+        <tr>
+          <td>{{ e['type'] }}</td>
+          <td><code>{{ e['key'] }}</code></td>
+          <td>{{ e['timestamp'] }}</td>
+          <td>{{ e['user'] }}</td>
+          <td>{{ e['paket'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p>Nächste Rotation: {{ next_rotation }}</p>
     <form method="post" action="{{ url_for('rotate_key') }}">
       <button class="btn btn-thunder">🔁 Manuelle Rotation</button>
     </form>
@@ -176,7 +282,7 @@ TEMPLATE = '''<!doctype html>
 <script>
   var socket = io();
   socket.on('log_update', function(data) {
-    const logArea = document.getElementById('logArea');
+    var logArea = document.getElementById('logArea');
     logArea.textContent += data.msg + "\\n";
     logArea.scrollTop = logArea.scrollHeight;
   });
@@ -185,7 +291,6 @@ TEMPLATE = '''<!doctype html>
 </body>
 </html>'''
 
-
 @app.route("/")
 def index():
     return redirect(url_for("admin"))
@@ -193,20 +298,19 @@ def index():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username", "")
-        password = request.form.get("password", "")
-        if username == "admin" and password == config.MASTER_KEY:
+        uname = request.form["username"]
+        pwd = request.form["password"]
+        if uname=="admin" and pwd==config.MASTER_KEY:
             session["logged_in"] = True
-            log_event("LOGIN", username)
+            log_event("LOGIN", uname)
             return redirect(url_for("admin"))
-        else:
-            return "Ungültige Anmeldedaten", 403
+        return "Ungültige Anmeldedaten", 403
     return '''
-        <form method="post">
-            Benutzername: <input name="username" required><br>
-            Passwort: <input type="password" name="password" required><br>
-            <input type="submit" value="Login">
-        </form>
+      <form method="post">
+        Benutzername: <input name="username"><br>
+        Passwort: <input type="password" name="password"><br>
+        <input type="submit" value="Login">
+      </form>
     '''
 
 @app.route("/logout")
@@ -219,89 +323,61 @@ def logout():
 @login_required
 def admin():
     global last_key_rotation
-
     paket = request.args.get("paket") or None
     hwid_filter = request.args.get("hwid_filter") or ""
     token_filter = request.args.get("token_filter") or ""
-    page = int(request.args.get("page", 1))
-    offset = (page - 1) * PER_PAGE
-
-    all_users = db.list_users(paket_filter=paket, hwid_filter=hwid_filter, token_filter=token_filter)
-    total_users = len(all_users)
-    total_pages = math.ceil(total_users / PER_PAGE)
-    users = all_users[offset:offset+PER_PAGE]
-
-    log_content = ""
-    if os.path.exists(LOGFILE):
-        with open(LOGFILE, "r") as f:
-            lines = f.readlines()[-20:]
-            log_content = "".join(lines)
-
+    page = int(request.args.get("page",1))
+    all_users = db.list_users(paket, hwid_filter, token_filter)
+    total_pages = math.ceil(len(all_users)/PER_PAGE)
+    users = all_users[(page-1)*PER_PAGE:page*PER_PAGE]
     watermarks = db.get_watermarks()
-
-    next_rotation = last_key_rotation + datetime.timedelta(seconds=KEY_ROTATION_INTERVAL)
-
-    # ECM/EMM Historie aus DB holen (muss db.get_recent_keys implementieren)
     ecm_emm_records = db.get_recent_keys(limit=20)
-
+    next_rotation = (last_key_rotation + datetime.timedelta(seconds=KEY_ROTATION_INTERVAL)).strftime("%Y-%m-%d %H:%M:%S")
     last_backup = None
-    if os.path.exists(BACKUP_DIR):
-        backups = [f for f in os.listdir(BACKUP_DIR) if f.endswith('.zip')]
-        if backups:
-            last_backup = sorted(backups)[-1]
-
+    if os.path.isdir(BACKUP_DIR):
+        backs = [f for f in os.listdir(BACKUP_DIR) if f.endswith('.zip')]
+        if backs: last_backup=sorted(backs)[-1]
     return render_template_string(
         TEMPLATE,
-        users=users,
-        paket_filter=paket,
-        hwid_filter=hwid_filter,
-        token_filter=token_filter,
-        page=page,
-        total_pages=total_pages,
+        users=users, paket_filter=paket,
+        hwid_filter=hwid_filter, token_filter=token_filter,
+        page=page, total_pages=total_pages,
         watermarks=watermarks,
-        log_content=log_content,
         ecm_emm_records=ecm_emm_records,
-        next_rotation=next_rotation.strftime("%Y-%m-%d %H:%M:%S"),
+        next_rotation=next_rotation,
         last_backup=last_backup
     )
 
 @app.route("/admin/delete", methods=["POST"])
 @login_required
 def delete_user():
-    username = request.form.get("username")
-    if username:
-        db.delete_user(username)
-        log_event("DELETE_USER", username)
+    db.delete_user(request.form["username"])
+    log_event("DELETE_USER", request.form["username"])
     return redirect(url_for("admin"))
 
 @app.route("/admin/edit", methods=["POST"])
 @login_required
 def edit_user():
-    username = request.form.get("username")
-    paket = request.form.get("paket")
-    hwid = request.form.get("hwid")
-    email = request.form.get("email")
-    if username and paket is not None and hwid is not None and email is not None:
-        db.update_user_details(username, paket, hwid, email)
-        log_event("EDIT_USER", username)
+    db.update_user_details(
+        request.form["username"],
+        request.form["paket"],
+        request.form["hwid"],
+        request.form["email"]
+    )
+    log_event("EDIT_USER", request.form["username"])
     return redirect(url_for("admin"))
 
 @app.route("/admin/rotate_key", methods=["POST"])
 @login_required
 def rotate_key():
     global last_key_rotation
-    # Neu erzeugen und speichern in DB (Positions-Parameter, keine Keywords)
     new_key = os.urandom(16).hex()
-    valid_until = None  # oder datetime... if gewünscht
-
-    # So aufrufen, damit es zur Signatur von DBHelper passt:
-    key_id = db.store_key(new_key, valid_until, 'admin', 'all')
-
     last_key_rotation = datetime.datetime.now(datetime.timezone.utc)
-    log_event("MANUAL_KEY_ROTATION", f"key_id={key_id}")
+    db.store_key(new_key, valid_until=None)  # store_key ohne user/paket-Flags
+    log_event("MANUAL_KEY_ROTATION", "admin")
     return redirect(url_for("admin"))
 
-@app.route("/admin/download-log", methods=["GET"])
+@app.route("/admin/download_log")
 @login_required
 def download_log():
     if os.path.exists(LOGFILE):
@@ -311,21 +387,16 @@ def download_log():
 @app.route("/admin/upload_watermark", methods=["POST"])
 @login_required
 def upload_watermark():
-    file = request.files.get('file')
-    name = request.form.get('name', 'Unnamed')
-    position = request.form.get('position', 'bottom-right')
-    visible = 'visible' in request.form
-
-    if not file or file.filename == '':
-        return "Keine Datei ausgewählt", 400
-    if not allowed_file(file.filename):
-        return "Dateityp nicht erlaubt", 400
-
+    file = request.files.get("file")
+    if not file or not allowed_file(file.filename):
+        return "Invalid file", 400
+    name = request.form.get("name","")
+    position = request.form.get("position","bottom-right")
+    visible = "visible" in request.form
     filename = secure_filename(file.filename)
-    save_path = os.path.join('static', 'watermarks', filename)
+    save_path = os.path.join("static","watermarks", filename)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     file.save(save_path)
-
     db.add_watermark(name, save_path, position, visible)
     log_event("UPLOAD_WATERMARK", name)
     return redirect(url_for("admin"))
@@ -333,19 +404,17 @@ def upload_watermark():
 @app.route("/admin/toggle_watermark", methods=["POST"])
 @login_required
 def toggle_watermark():
-    wm_id = request.form.get('wm_id')
-    visible = request.form.get('visible')
-    if wm_id is None or visible is None:
-        return "Fehlende Parameter", 400
-    db.update_watermark(int(wm_id), visible=(visible == '1'))
-    log_event("TOGGLE_WATERMARK", wm_id)
+    wm_id = int(request.form["wm_id"])
+    visible = request.form["visible"]=="1"
+    db.update_watermark(wm_id, visible=visible)
+    log_event("TOGGLE_WATERMARK", f"WM {wm_id}")
     return redirect(url_for("admin"))
 
 @app.route("/admin/create_backup", methods=["POST"])
 @login_required
 def trigger_backup():
-    backup_name = create_backup()
-    flash(f"Backup erstellt: {backup_name}", "success")
+    name = create_backup()
+    flash(f"Backup {name} erstellt", "success")
     return redirect(url_for("admin"))
 
 @app.route("/admin/download_backup/<filename>")
@@ -354,31 +423,25 @@ def download_backup(filename):
     path = os.path.join(BACKUP_DIR, filename)
     if os.path.exists(path):
         return send_file(path, as_attachment=True)
-    return "Backup nicht gefunden", 404
+    return "Nicht gefunden", 404
 
-@app.route("/admin/restore_backup", methods=["POST"], endpoint='restore_backup')
+@app.route("/admin/restore_backup", methods=["POST"], endpoint="restore_backup")
 @login_required
 def restore_backup():
-    file = request.files.get('backup_file')
-    if not file or file.filename == '':
-        flash("Keine Datei ausgewählt", "danger")
-        return redirect(url_for("admin"))
-
-    filename = secure_filename(file.filename)
-    save_path = os.path.join(BACKUP_DIR, filename)
+    f = request.files.get("backup_file")
+    if not f:
+        flash("Keine Datei", "error"); return redirect(url_for("admin"))
+    fname = secure_filename(f.filename)
+    save_path = os.path.join(BACKUP_DIR, fname)
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    file.save(save_path)
-
-    if restore_backup_file(save_path):
-        flash(f"Backup {filename} wiederhergestellt", "success")
-    else:
-        flash(f"Fehler beim Wiederherstellen von {filename}", "danger")
-
+    f.save(save_path)
+    ok = restore_backup_file(save_path)
+    flash("Wiederhergestellt" if ok else "Fehler", "success" if ok else "error")
     return redirect(url_for("admin"))
 
 @socketio.on('connect')
-def socket_connect():
-    emit('log_update', {'msg': 'Verbunden mit Admin-Dashboard'})
+def on_connect():
+    emit('log_update', {'msg':'Verbunden mit Thunder Dashboard'})
 
 if __name__ == "__main__":
     socketio.run(app, host=config.HOST, port=config.PORT_ADMIN, debug=True)
