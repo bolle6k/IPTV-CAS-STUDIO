@@ -238,7 +238,9 @@ class DBHelper:
     def get_valid_key_for_user(self, username):
         row = self.get_valid_keys(username=username)
         return row[0][1] if row else None
-
+        
+    def store_key(self, key_value, valid_until=None, user=None, paket=None)
+    
     def get_key_by_id(self, key_id):
         with self.lock, self._connect() as conn:
             return conn.execute('SELECT key_id, key_value, created_at, valid_until, username, paket FROM keys WHERE key_id = ?', (key_id,)).fetchone()
