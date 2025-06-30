@@ -10,6 +10,7 @@ app.secret_key = config.MASTER_KEY
 
 db = DBHelper(config.DB_PATH)
 
+# Template
 SELF_SERVICE_TEMPLATE = '''
 <!doctype html>
 <html lang="de">
@@ -24,9 +25,7 @@ SELF_SERVICE_TEMPLATE = '''
     {% if messages %}
       <ul>
       {% for category, message in messages %}
-        <li style="color: {% if category == 'error' %}red{% else %}green{% endif %};">
-          {{ message }}
-        </li>
+        <li style="color: {% if category == 'error' %}red{% else %}green{% endif %}">{{ message }}</li>
       {% endfor %}
       </ul>
     {% endif %}
@@ -35,7 +34,7 @@ SELF_SERVICE_TEMPLATE = '''
   {% if user %}
     <p><b>Benutzername:</b> {{ user.username }}</p>
     <p><b>HWID:</b> {{ user.hwid }}</p>
-    <p><b>Bestes aktives Paket:</b> {{ best_paket }}</p>
+    <p><b>Bestes aktives Paket:</b> {{ user.paket }}</p>
 
     {% if subscription %}
       <p><b>Abo gültig bis:</b> {{ subscription.end_date }}</p>
@@ -58,14 +57,14 @@ SELF_SERVICE_TEMPLATE = '''
       <label for="paket">Paket:</label>
       <select name="paket" id="paket" required>
         {% for p in prices.keys() %}
-          <option value="{{ p }}">{{ p }}</option>
+          <option value="{{ p }}" {% if p == user.paket %}selected{% endif %}>{{ p }}</option>
         {% endfor %}
       </select>
       <label for="zyklus">Laufzeit:</label>
       <select name="zyklus" id="zyklus" required>
-        <option value="1m">1 Monat – {{ prices[p]['1m'] }}€</option>
-        <option value="6m">6 Monate – {{ prices[p]['6m'] }}€</option>
-        <option value="12m">1 Jahr – {{ prices[p]['12m'] }}€</option>
+        <option value="1m">1 Monat - {{ prices[user.paket]['1m'] }}€</option>
+        <option value="6m">6 Monate - {{ prices[user.paket]['6m'] }}€</option>
+        <option value="12m">1 Jahr - {{ prices[user.paket]['12m'] }}€</option>
       </select>
       <button type="submit">Buchen / Verlängern</button>
     </form>
@@ -87,106 +86,125 @@ SELF_SERVICE_TEMPLATE = '''
   {% endif %}
 
 <script>
-  // Resttage-Rechner
-  const endDateStr = "{{ subscription.end_date if subscription else '' }}";
+  // Restlaufzeit berechnen
   function showRemainingDays() {
-    if (!endDateStr) { document.getElementById('remaining-days').innerText = '0'; return; }
-    const end = new Date(endDateStr);
+    const endDateStr = "{{ subscription.end_date if subscription else '' }}";
+    if (!endDateStr) {
+      document.getElementById('remaining-days').innerText = '0';
+      return;
+    }
+    const endDate = new Date(endDateStr);
     const now = new Date();
-    const diff = Math.max(0, Math.ceil((end - now) / (1000*60*60*24)));
-    document.getElementById('remaining-days').innerText = diff;
+    const diffTime = endDate - now;
+    const diffDays = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    document.getElementById('remaining-days').innerText = diffDays;
   }
-  if (document.getElementById('remaining-days')) showRemainingDays();
+  showRemainingDays();
 </script>
 </body>
 </html>
 '''
 
-@app.route('/selfservice', methods=['GET', 'POST'])
+# Paket-Prioritäten
+PAKET_ORDER = {'Basis':1, 'Basis+':2, 'Premium':3}
+
+def compute_subscription_period(username, new_paket, zyklus):
+    """Berechnet Start- und Enddatum eines neuen Abos basierend auf bestehendem besten Abo."""
+    days_map = {'1m':30, '6m':183, '12m':365}
+    period = days_map[zyklus]
+    today = datetime.date.today()
+
+    # Beste aktive Subscription holen
+    sub = db.get_active_subscription(username)
+    if sub:
+        current_paket = sub[2]
+        current_end = datetime.date.fromisoformat(sub[4])
+        # wenn neues Paket höher priorisiert wird, sofort starten
+        if PAKET_ORDER[new_paket] > PAKET_ORDER[current_paket]:
+            start = today
+        else:
+            # sonst erst nach aktuellem Ende
+            start = current_end
+    else:
+        start = today
+    end = start + datetime.timedelta(days=period)
+    return start.isoformat(), end.isoformat()
+
+@app.route('/selfservice', methods=['GET','POST'])
 def login():
-    # Anmeldung per Token
-    token = request.values.get('token', '').strip()
-    if request.method == 'POST' and token:
-        user_row = db.get_user_by_token(token)
-        if not user_row:
+    if request.method == 'POST':
+        token = request.form.get('token','').strip()
+        if not token:
+            return render_template_string(SELF_SERVICE_TEMPLATE, user=None, error="Bitte Token eingeben", prices=config.PRICES)
+        user_data = db.get_user_by_token(token)
+        if not user_data:
             return render_template_string(SELF_SERVICE_TEMPLATE, user=None, error="Ungültiger Token", prices=config.PRICES)
         user = {
-            'username': user_row[0],
-            'hwid': user_row[1],
-            'paket': user_row[2],
-            'token': user_row[3],
-            'email': user_row[4]
+            'username': user_data[0],
+            'hwid': user_data[1],
+            'paket': user_data[2],
+            'token': user_data[3],
+            'email': user_data[4]
         }
-        # beste Paket und aktuelle Subscription
-        best = db.get_best_active_package(user['username'])
+        # Beste aktive Subscription und Restlaufzeit
         sub = db.get_active_subscription(user['username'])
         subscription = None
         if sub:
             subscription = {
-                'sub_id': sub[0], 'username': sub[1], 'paket': sub[2],
-                'start_date': sub[3], 'end_date': sub[4], 'active': sub[5]
+                'id': sub[0],
+                'username': sub[1],
+                'paket': sub[2],
+                'start_date': sub[3],
+                'end_date': sub[4],
+                'active': sub[5]
             }
-        return render_template_string(
-            SELF_SERVICE_TEMPLATE,
-            user=user,
-            best_paket=best,
-            subscription=subscription,
-            prices=config.PRICES,
-            error=None
-        )
-    # erster Aufruf oder GET
-    return render_template_string(SELF_SERVICE_TEMPLATE, user=None, error=None, prices=config.PRICES)
+            user['paket'] = subscription['paket']
+        return render_template_string(SELF_SERVICE_TEMPLATE, user=user, subscription=subscription, prices=config.PRICES, error=None)
+
+    # GET-Formular
+    return render_template_string(SELF_SERVICE_TEMPLATE, user=None, subscription=None, prices=config.PRICES, error=None)
 
 @app.route('/selfservice/renew_token', methods=['POST'])
 def renew_token():
-    username = request.form.get('username','').strip()
-    if not db.get_user_by_username(username):
-        flash("Benutzer nicht gefunden", "error")
-    else:
-        new_token = uuid.uuid4().hex[:16]
-        db.update_user_token(username, new_token)
-        flash("Token erneuert", "success")
-    return redirect(url_for('login'))
+    username = request.form.get('username','')
+    user = db.get_user_by_username(username)
+    if not user:
+        flash("Benutzer nicht gefunden","error")
+        return redirect(url_for('login'))
+    new_token = uuid.uuid4().hex[:16]
+    db.update_user_token(username, new_token)
+    flash("Token erfolgreich erneuert","success")
+    return redirect(f"{url_for('login')}?token={new_token}")
 
 @app.route('/selfservice/subscribe', methods=['POST'])
 def subscribe():
-    username = request.form.get('username','').strip()
-    paket   = request.form.get('paket','').strip()
-    zyklus  = request.form.get('zyklus','')
+    username = request.form.get('username')
+    paket = request.form.get('paket')
+    zyklus = request.form.get('zyklus')
     if not username or not paket or zyklus not in ('1m','6m','12m'):
-        flash("Ungültige Eingaben", "error")
+        flash("Ungültige Eingaben","error")
         return redirect(url_for('login'))
 
-    # Berechne neuen End-Datum (anhängen an Restlaufzeit)
-    today = datetime.datetime.utcnow().date()
-    sub = db.get_active_subscription(username)
-    if sub and datetime.date.fromisoformat(sub[4]) >= today:
-        base = datetime.date.fromisoformat(sub[4])
-    else:
-        base = today
-
-    if zyklus=='1m':
-        new_end = base + datetime.timedelta(days=30)
-    elif zyklus=='6m':
-        new_end = base + datetime.timedelta(days=183)
-    else:
-        new_end = base + datetime.timedelta(days=365)
-
-    # Anlage
-    db.add_subscription(username, paket, today.isoformat(), new_end.isoformat())
-    flash(f"Paket {paket} bis {new_end.isoformat()} gebucht", "success")
-    return redirect(url_for('login') + f"?token={db.get_token_by_username(username)}")
+    # Start- und Enddatum berechnen
+    start, end = compute_subscription_period(username, paket, zyklus)
+    db.add_subscription(username, paket, start, end)
+    # Paket in User-Tabelle updaten auf bestes Paket
+    db.update_user_details(username, paket, None, None)
+    flash(f"Paket {paket} gebucht von {start} bis {end}","success")
+    token = db.get_user_by_username(username)[4]  # neues oder altes Token
+    return redirect(f"{url_for('login')}?token={token}")
 
 @app.route('/selfservice/cancel', methods=['POST'])
 def cancel():
-    username = request.form.get('username','').strip()
+    username = request.form.get('username')
     if not username:
-        flash("Benutzername fehlt", "error")
-    else:
-        # Setze active=0, bleibt aber bis Ablauf gültig
-        db.cancel_subscription(username)
-        flash("Abo gekündigt – läuft bis Ablauf weiter", "success")
-    return redirect(url_for('login'))
+        flash("Benutzername fehlt","error")
+        return redirect(url_for('login'))
+    # Subscription auf inaktiv setzen (bleibt aber bis Enddatum gültig)
+    db.cancel_subscription(username)
+    flash("Abo gekündigt. Es läuft bis zum offiziellen Enddatum weiter.","success")
+    token = db.get_user_by_username(username)[4]
+    return redirect(f"{url_for('login')}?token={token}")
 
 if __name__ == '__main__':
     app.run(host=config.HOST, port=config.PORT_SELF_SERVICE, debug=True)
