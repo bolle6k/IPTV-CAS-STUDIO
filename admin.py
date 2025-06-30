@@ -1,4 +1,3 @@
-# user_admin.py
 
 from PySide6.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
                                QVBoxLayout, QHBoxLayout, QMessageBox, QListWidget, QListWidgetItem)
