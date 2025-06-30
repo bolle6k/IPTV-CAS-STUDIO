@@ -9,12 +9,12 @@ class DBHelper:
         self._create_tables()
 
     def _connect(self):
-        return sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
+        return sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
 
     def _create_tables(self):
         with self.lock, self._connect() as conn:
             c = conn.cursor()
-            # Users
+            # Nutzer
             c.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     username TEXT PRIMARY KEY,
@@ -25,55 +25,52 @@ class DBHelper:
                     email TEXT
                 )
             ''')
-            # Subscriptions
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS subscriptions (
-                    sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT,
-                    paket TEXT,
-                    start_date TEXT,
-                    end_date TEXT,
-                    canceled_flag INTEGER DEFAULT 0,
-                    FOREIGN KEY(username) REFERENCES users(username)
-                )
-            ''')
-            # Keys (ECM/EMM)
+            # Schlüssel (ECM/EMM)
             c.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
-                    key_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_value TEXT NOT NULL,
+                    key_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_value  TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     valid_until TIMESTAMP,
-                    username TEXT,
-                    paket TEXT,
-                    FOREIGN KEY(username) REFERENCES users(username)
+                    user       TEXT,
+                    paket      TEXT
                 )
             ''')
             # Watermarks
             c.execute('''
                 CREATE TABLE IF NOT EXISTS watermarks (
-                    wm_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT,
-                    path TEXT,
+                    wm_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name     TEXT,
+                    path     TEXT,
                     position TEXT,
-                    visible INTEGER
+                    visible  INTEGER DEFAULT 1
+                )
+            ''')
+            # Abonnements
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    sub_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username   TEXT,
+                    paket      TEXT,
+                    start_date DATE,
+                    end_date   DATE,
+                    cancelled  INTEGER DEFAULT 0
                 )
             ''')
             # Payments
             c.execute('''
                 CREATE TABLE IF NOT EXISTS payments (
                     payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT,
-                    amount REAL,
-                    currency TEXT,
-                    status TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(username) REFERENCES users(username)
+                    username   TEXT,
+                    amount     REAL,
+                    currency   TEXT,
+                    status     TEXT,
+                    timestamp  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             conn.commit()
 
-    # --- User Methods ---
+    # --- User-Methoden ---
     def add_user(self, username, password, hwid, paket, token, email=''):
         with self.lock, self._connect() as conn:
             conn.execute('''
@@ -95,43 +92,9 @@ class DBHelper:
     def update_user_details(self, username, paket, hwid, email):
         with self.lock, self._connect() as conn:
             conn.execute('''
-                UPDATE users SET paket = ?, hwid = ?, email = ?
-                WHERE username = ?
+                UPDATE users SET paket = ?, hwid = ?, email = ? WHERE username = ?
             ''', (paket, hwid, email, username))
             conn.commit()
-
-    def update_user_token(self, username, token):
-        with self.lock, self._connect() as conn:
-            conn.execute('UPDATE users SET token = ? WHERE username = ?', (token, username))
-            conn.commit()
-
-    def update_user_package(self, username, paket):
-        with self.lock, self._connect() as conn:
-            conn.execute('UPDATE users SET paket = ? WHERE username = ?', (paket, username))
-            conn.commit()
-
-    def get_user_by_username(self, username):
-        with self.lock, self._connect() as conn:
-            return conn.execute(
-                'SELECT username, hwid, paket, token, email FROM users WHERE username = ?', (username,)
-            ).fetchone()
-
-    def get_user_by_token(self, token):
-        with self.lock, self._connect() as conn:
-            return conn.execute(
-                'SELECT username, hwid, paket, token, email FROM users WHERE token = ?', (token,)
-            ).fetchone()
-
-    def get_user_by_hwid(self, hwid):
-        with self.lock, self._connect() as conn:
-            return conn.execute(
-                'SELECT username, hwid, paket, token, email FROM users WHERE hwid = ?', (hwid,)
-            ).fetchone()
-
-    def get_token_by_username(self, username):
-        with self.lock, self._connect() as conn:
-            row = conn.execute('SELECT token FROM users WHERE username = ?', (username,)).fetchone()
-            return row[0] if row else None
 
     def list_users(self, paket_filter=None, hwid_filter='', token_filter=''):
         query = 'SELECT username, hwid, paket, token, email FROM users WHERE 1=1'
@@ -148,11 +111,80 @@ class DBHelper:
         with self.lock, self._connect() as conn:
             return conn.execute(query, params).fetchall()
 
+    def get_user_by_token(self, token):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE token = ?', (token,)
+            ).fetchone()
+
+    def get_user_by_username(self, username):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE username = ?', (username,)
+            ).fetchone()
+
+    def get_user_by_hwid(self, hwid):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE hwid = ?', (hwid,)
+            ).fetchone()
+
     def get_all_users(self):
         with self.lock, self._connect() as conn:
-            return conn.execute('SELECT username, hwid, paket, token, email FROM users').fetchall()
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users'
+            ).fetchall()
 
-    # --- Subscription Methods ---
+    def update_user_token(self, username, new_token):
+        with self.lock, self._connect() as conn:
+            conn.execute('UPDATE users SET token = ? WHERE username = ?', (new_token, username))
+            conn.commit()
+
+    def update_user_package(self, username, paket):
+        with self.lock, self._connect() as conn:
+            conn.execute('UPDATE users SET paket = ? WHERE username = ?', (paket, username))
+            conn.commit()
+
+    # --- Key-Methoden ---
+    def store_key(self, key_value, valid_until=None, user=None, paket=None):
+        with self.lock, self._connect() as conn:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO keys (key_value, valid_until, user, paket) VALUES (?, ?, ?, ?)
+            ''', (key_value, valid_until, user, paket))
+            conn.commit()
+            return c.lastrowid
+
+    def get_key_by_id(self, key_id):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT key_id, key_value, created_at, valid_until, user, paket FROM keys WHERE key_id = ?',
+                (key_id,)
+            ).fetchone()
+
+    def get_valid_keys(self, user=None, paket=None):
+        query = 'SELECT key_id, key_value FROM keys WHERE (valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP)'
+        params = []
+        if user:
+            query += ' AND user = ?'; params.append(user)
+        if paket:
+            query += ' AND paket = ?'; params.append(paket)
+        with self.lock, self._connect() as conn:
+            return conn.execute(query, params).fetchall()
+
+    def get_recent_keys(self, limit=20):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT key_id, key_value, created_at, user, paket FROM keys ORDER BY created_at DESC LIMIT ?',
+                (limit,)
+            ).fetchall()
+
+    def get_valid_key_for_user(self, username):
+        # Liefert den jüngsten, noch gültigen Key für diesen Nutzer
+        rec = self.get_valid_keys(user=username)
+        return rec[0][1] if rec else None
+
+    # --- Subscription-Methoden ---
     def add_subscription(self, username, paket, start_date, end_date):
         with self.lock, self._connect() as conn:
             conn.execute('''
@@ -161,99 +193,43 @@ class DBHelper:
             ''', (username, paket, start_date, end_date))
             conn.commit()
 
-    def get_active_subscription(self, username):
-        today = datetime.date.today().isoformat()
-        with self.lock, self._connect() as conn:
-            return conn.execute('''
-                SELECT sub_id, username, paket, start_date, end_date, canceled_flag
-                FROM subscriptions
-                WHERE username = ?
-                  AND canceled_flag = 0
-                  AND date(end_date) >= date(?)
-                ORDER BY date(end_date) DESC
-                LIMIT 1
-            ''', (username, today)).fetchone()
-
-    def get_active_subscriptions(self, username):
-        today = datetime.date.today().isoformat()
-        with self.lock, self._connect() as conn:
-            return conn.execute('''
-                SELECT sub_id, username, paket, start_date, end_date, canceled_flag
-                FROM subscriptions
-                WHERE username = ?
-                  AND canceled_flag = 0
-                  AND date(end_date) >= date(?)
-                ORDER BY date(end_date) DESC
-            ''', (username, today)).fetchall()
-
     def cancel_subscription(self, username):
-        """Markiert alle noch aktiven Subscriptions als gecanceled, Restlaufzeit bleibt bestehen."""
-        today = datetime.date.today().isoformat()
+        # Markiert alle aktiven Abos als 'cancelled' – Laufzeit bleibt erhalten
         with self.lock, self._connect() as conn:
             conn.execute('''
-                UPDATE subscriptions
-                SET canceled_flag = 1
-                WHERE username = ?
-                  AND canceled_flag = 0
-                  AND date(end_date) >= date(?)
-            ''', (username, today))
+                UPDATE subscriptions SET cancelled = 1
+                WHERE username = ? AND end_date > DATE('now')
+            ''', (username,))
             conn.commit()
 
-    def get_best_active_package(self, username):
-        """Gibt das privilegierteste Paket aller aktiven Subscriptions zurück."""
-        priority = {"Basis": 1, "Basis+": 2, "Premium": 3}
-        subs = self.get_active_subscriptions(username)
-        best = None
-        best_prio = 0
-        for _, _, pak, _, _, _ in subs:
-            pr = priority.get(pak, 0)
-            if pr > best_prio:
-                best_prio = pr
-                best = pak
-        return best or "Kein Abo"
-
-    # --- Key Methods ---
-    def store_key(self, key_value, valid_until=None, username=None, paket=None):
-        with self.lock, self._connect() as conn:
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO keys (key_value, valid_until, username, paket)
-                VALUES (?, ?, ?, ?)
-            ''', (key_value, valid_until, username, paket))
-            conn.commit()
-            return c.lastrowid
-
-    def get_valid_keys(self, username=None, paket=None):
-        query = 'SELECT key_id, key_value FROM keys WHERE (valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP)'
-        params = []
-        if username:
-            query += ' AND username = ?'
-            params.append(username)
-        if paket:
-            query += ' AND paket = ?'
-            params.append(paket)
-        with self.lock, self._connect() as conn:
-            return conn.execute(query, params).fetchall()
-
-    def get_valid_key_for_user(self, username):
-        row = self.get_valid_keys(username=username)
-        return row[0][1] if row else None
-        
-    def store_key(self, key_value, valid_until=None, user=None, paket=None)
-    
-    def get_key_by_id(self, key_id):
-        with self.lock, self._connect() as conn:
-            return conn.execute('SELECT key_id, key_value, created_at, valid_until, username, paket FROM keys WHERE key_id = ?', (key_id,)).fetchone()
-
-    def get_recent_keys(self, limit=20):
+    def get_active_subscriptions(self, username):
+        # Liefert alle nicht-cancelled Abos, deren end_date >= heute
         with self.lock, self._connect() as conn:
             return conn.execute('''
-                SELECT key_id, key_value, created_at, valid_until, username, paket
-                FROM keys ORDER BY created_at DESC LIMIT ?
-            ''', (limit,)).fetchall()
+                SELECT sub_id, username, paket, start_date, end_date, cancelled
+                FROM subscriptions
+                WHERE username = ?
+                  AND cancelled = 0
+                  AND DATE(end_date) >= DATE('now')
+                ORDER BY end_date DESC
+            ''', (username,)).fetchall()
 
-    # --- Watermark Methods ---
-    def add_watermark(self, name, path, position, visible):
+    def get_active_subscription(self, username):
+        subs = self.get_active_subscriptions(username)
+        return subs[0] if subs else None
+
+    def get_best_active_package(self, username):
+        # Sortierreihenfolge: Premium > Basis+ > Basis > Kein Abo
+        priority = {'Premium':3, 'Basis+':2, 'Basis':1}
+        subs = self.get_active_subscriptions(username)
+        if not subs:
+            return 'Kein Abo'
+        # Wähle das Paket mit der höchsten Priorität
+        best = max(subs, key=lambda s: priority.get(s[2], 0))
+        return best[2]
+
+    # --- Watermark-Methoden ---
+    def add_watermark(self, name, path, position, visible=True):
         with self.lock, self._connect() as conn:
             conn.execute('''
                 INSERT INTO watermarks (name, path, position, visible)
@@ -263,14 +239,18 @@ class DBHelper:
 
     def get_watermarks(self):
         with self.lock, self._connect() as conn:
-            return conn.execute('SELECT wm_id, name, path, position, visible FROM watermarks').fetchall()
+            return conn.execute('''
+                SELECT wm_id, name, path, position, visible FROM watermarks
+            ''').fetchall()
 
     def update_watermark(self, wm_id, visible):
         with self.lock, self._connect() as conn:
-            conn.execute('UPDATE watermarks SET visible = ? WHERE wm_id = ?', (int(visible), wm_id))
+            conn.execute('''
+                UPDATE watermarks SET visible = ? WHERE wm_id = ?
+            ''', (int(visible), wm_id))
             conn.commit()
 
-    # --- Payment Methods ---
+    # --- Payment-Methoden ---
     def add_payment(self, username, amount, currency, status):
         with self.lock, self._connect() as conn:
             c = conn.cursor()
@@ -288,8 +268,3 @@ class DBHelper:
                 FROM payments WHERE username = ?
                 ORDER BY timestamp DESC
             ''', (username,)).fetchall()
-
-    # --- Helpers ---
-    def has_active_subscription(self, username):
-        """Boolean, ob der Nutzer aktuell mindestens eine aktive Sub hat."""
-        return self.get_active_subscription(username) is not None
