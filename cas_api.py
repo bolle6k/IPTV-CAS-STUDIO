@@ -12,190 +12,184 @@ import config
 from db_helper import DBHelper
 
 app = Flask(__name__)
-app.secret_key = config.MASTER_KEY
-
-# DBHelper initialisieren
 db = DBHelper(config.DB_PATH)
 
 # Logging
-logging.basicConfig(filename=config.LOG_FILE, level=logging.INFO,
-                    format='%(asctime)s %(levelname)s %(message)s')
+logging.basicConfig(
+    filename=config.LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 
-# Rate Limiter (Redis empfohlen)
+# Rate limiter (Redis-Backend)
 limiter = Limiter(
+    app,
     key_func=get_remote_address,
     storage_uri=f"redis://{config.REDIS_HOST}:{config.REDIS_PORT}",
     default_limits=["200 per day", "50 per hour"]
 )
-limiter.init_app(app)
 
-ROTATION_INTERVAL = config.ROTATION_INTERVAL
+def verify_signature(data: str, signature: str) -> bool:
+    expected = hmac.new(
+        config.API_SECRET_KEY.encode(),
+        data.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
-def verify_signature(data, signature):
-    computed = hmac.new(config.API_SECRET_KEY.encode(), data.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(computed, signature)
-
-def log_request(user_id, action, success=True):
-    ip = request.remote_addr if request else 'system'
+def log_request(user_id: str, action: str, success: bool = True):
+    ip = request.remote_addr if request else "system"
     status = "SUCCESS" if success else "FAILURE"
     logging.info(f"{status} User:{user_id} IP:{ip} Action:{action}")
 
-def save_keyfile(key_hex, filepath):
-    key_bytes = bytes.fromhex(key_hex)
-    with open(filepath, 'wb') as f:
-        f.write(key_bytes)
+def generate_control_word() -> str:
+    """Neuen Control Word (ECM-Key) erzeugen."""
+    return os.urandom(16).hex()
 
-@app.route('/api/authenticate', methods=['POST'])
+def automatic_key_rotation():
+    """Periodisch für alle Nutzer mit aktivem Abo neue Keys erstellen."""
+    while True:
+        time.sleep(config.ROTATION_INTERVAL)
+        users = db.get_all_users()
+        now = datetime.datetime.utcnow().date().isoformat()
+        for u in users:
+            username, hwid, paket, token, email = u
+            sub = db.get_active_subscription(username)
+            if not sub:
+                continue
+            # Erzeuge und speichere neuen CW
+            cw = generate_control_word()
+            valid_until = (datetime.date.fromisoformat(sub[4])  # end_date
+                           ).isoformat()
+            db.store_key(cw, valid_until, username, paket)
+            log_request(username, "auto_key_rotate")
+
+# --- API Endpoints ---
+
+@app.route("/api/authenticate", methods=["POST"])
 @limiter.limit("10/minute")
 def authenticate():
-    content = request.json or {}
-    hwid = content.get('hwid','')
-    token = content.get('token','')
-    signature = request.headers.get('X-Signature','')
+    data = request.json or {}
+    hwid = data.get("hwid", "")
+    token = data.get("token", "")
+    sig   = request.headers.get("X-Signature", "")
+    if not (hwid or token) or not verify_signature(f"{hwid}{token}", sig):
+        log_request("unknown", "authenticate", False)
+        abort(403, "Invalid signature or missing credentials")
 
-    if not signature or not verify_signature(f'{hwid}{token}', signature):
-        log_request('unknown','authenticate',False)
-        abort(403, "Invalid signature")
-
-    user = db.get_user_by_token(token) or db.get_user_by_hwid(hwid)
+    # Nutzer suchen
+    user = db.get_user_by_token(token) if token else db.get_user_by_hwid(hwid)
     if not user:
-        log_request('unknown','authenticate',False)
+        log_request("unknown", "authenticate", False)
         abort(404, "User not found")
 
-    # Prüfen auf aktives Abo
-    if not db.get_active_subscription(user[0]):
-        log_request(user[0],'authenticate',False)
-        abort(403, "Subscription expired or inactive")
+    username = user[0]
+    # Abo prüfen
+    if not db.get_active_subscription(username):
+        log_request(username, "authenticate", False)
+        abort(403, "Subscription inactive or expired")
 
-    log_request(user[0],'authenticate',True)
-
-    # ECM-Key holen oder neu erzeugen
-    key = db.get_valid_key_for_user(user[0])
+    # Key holen / neu anlegen
+    key = db.get_valid_key_for_user(username)
     if not key:
-        key_id = db.store_key(
-            key_value = os.urandom(16).hex(),
-            valid_until = (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat(),
-            user = user[0],
-            paket = user[2]
-        )
-        key = db.get_key_by_id(key_id)[1]
+        key = generate_control_word()
+        end = db.get_active_subscription(username)[4]
+        db.store_key(key, end, username, user[2])
 
+    log_request(username, "authenticate")
     return jsonify({
-        'status':'ok',
-        'user': {
-            'username': user[0],
-            'hwid': user[1],
-            'paket': user[2],
-            'token': user[3],
-            'email': user[4]
+        "status": "ok",
+        "user": {
+            "username": user[0],
+            "hwid": user[1],
+            "paket": user[2],
+            "token": user[3],
+            "email": user[4]
         },
-        'ecm_key': key
+        "ecm_key": key
     })
 
-@app.route('/api/stream_info', methods=['GET'])
+@app.route("/api/stream_info", methods=["GET"])
 @limiter.limit("30/minute")
 def stream_info():
-    token = request.args.get('token','')
-    signature = request.headers.get('X-Signature','')
-
-    if not token or not signature or not verify_signature(token, signature):
-        log_request('unknown','stream_info',False)
+    token = request.args.get("token", "")
+    sig   = request.headers.get("X-Signature", "")
+    if not token or not verify_signature(token, sig):
+        log_request("unknown", "stream_info", False)
         abort(403, "Invalid or missing token/signature")
 
     user = db.get_user_by_token(token)
     if not user:
-        log_request('unknown','stream_info',False)
+        log_request("unknown", "stream_info", False)
         abort(404, "User not found")
 
-    if not db.get_active_subscription(user[0]):
-        log_request(user[0],'stream_info',False)
-        abort(403, "Subscription expired or inactive")
+    username = user[0]
+    if not db.get_active_subscription(username):
+        log_request(username, "stream_info", False)
+        abort(403, "Subscription inactive or expired")
 
-    # Aktuellen ECM-Key holen
-    key = db.get_valid_key_for_user(user[0])
+    # Key holen oder neu erzeugen
+    key = db.get_valid_key_for_user(username)
     if not key:
-        key_id = db.store_key(
-            key_value = os.urandom(16).hex(),
-            valid_until = (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat(),
-            user = user[0],
-            paket = user[2]
-        )
-        key = db.get_key_by_id(key_id)[1]
+        key = generate_control_word()
+        end = db.get_active_subscription(username)[4]
+        db.store_key(key, end, username, user[2])
 
-    log_request(user[0],'stream_info',True)
-
+    log_request(username, "stream_info")
     return jsonify({
-        'status':'ok',
-        'stream_info': {
-            'stream_url': f"{config.BASE_STREAM_URL}{user[0]}/stream.m3u8",
-            'aes_key': key,
-            'watermark': f"User-{user[0]}-WM",
-            'logo_url': f"{config.BASE_STREAM_URL}logos/logo.png"
-        }
+        "status": "ok",
+        "stream_url": f"{config.BASE_STREAM_URL}{username}/stream.m3u8",
+        "aes_key": key,
+        "watermark": f"WM-{username}",
+        "logo_url": config.BASE_STREAM_URL + "logos/logo.png"
     })
 
-@app.route('/api/token/create', methods=['POST'])
+@app.route("/api/token/create", methods=["POST"])
 @limiter.limit("5/minute")
 def create_token():
-    auth = request.headers.get('Authorization','')
+    auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {config.MASTER_KEY}":
-        log_request('unknown','create_token',False)
+        log_request("unknown", "create_token", False)
         abort(403, "Master key required")
 
     data = request.json or {}
-    username = data.get('username')
-    hwid     = data.get('hwid')
-    paket    = data.get('paket','Basis')
-    email    = data.get('email','')
+    username = data.get("username", "")
+    hwid     = data.get("hwid", "")
+    paket    = data.get("paket", "Basis")
+    email    = data.get("email", "")
 
-    if not username or not hwid:
+    if not (username and hwid):
         abort(400, "Missing username or hwid")
 
     token = os.urandom(16).hex()
-    db.add_user(username, '', hwid, paket, token, email)
+    db.add_user(username, "", hwid, paket, token, email)
+    # Sofort einen Key anlegen
+    cw = generate_control_word()
+    # Laufzeit aus default-Abo (heute + 30 Tage)
+    end = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+    db.store_key(cw, end, username, paket)
 
-    # Ersten ECM-Key erzeugen
-    db.store_key(
-        key_value = os.urandom(16).hex(),
-        valid_until = (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat(),
-        user = username,
-        paket = paket
-    )
+    log_request(username, "create_token")
+    return jsonify({"status": "ok", "token": token})
 
-    log_request(username,'create_token',True)
-    return jsonify({'status':'ok','token':token})
-
-@app.route('/api/token/revoke', methods=['POST'])
+@app.route("/api/token/revoke", methods=["POST"])
 @limiter.limit("5/minute")
 def revoke_token():
-    auth = request.headers.get('Authorization','')
+    auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {config.MASTER_KEY}":
-        log_request('unknown','revoke_token',False)
+        log_request("unknown", "revoke_token", False)
         abort(403, "Master key required")
 
-    token = (request.json or {}).get('token')
+    data = request.json or {}
+    token = data.get("token", "")
     if not token:
         abort(400, "Missing token")
 
     db.delete_user_by_token(token)
-    log_request('unknown','revoke_token',True)
-    return jsonify({'status':'ok'})
+    log_request("unknown", "revoke_token")
+    return jsonify({"status": "ok"})
 
-def automatic_key_rotation():
-    while True:
-        # Alle Nutzer mit aktivem Abo holen
-        users = db.get_all_users()
-        for u in users:
-            username = u[0]
-            if db.get_active_subscription(username):
-                new_key = os.urandom(16).hex()
-                valid_until = (datetime.datetime.utcnow() + datetime.timedelta(seconds=ROTATION_INTERVAL)).isoformat()
-                db.store_key(new_key, valid_until, username, u[2])
-                log_request(username,'auto_key_rotate',True)
-        time.sleep(ROTATION_INTERVAL)
-
-if __name__ == '__main__':
-    # Starte Rotation-Thread
+# Starte Auto-Rotation im Hintergrund
+if __name__ == "__main__":
     threading.Thread(target=automatic_key_rotation, daemon=True).start()
-    # Starte API
     app.run(host=config.HOST, port=config.PORT_API, debug=False)
