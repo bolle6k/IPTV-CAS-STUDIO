@@ -1,0 +1,187 @@
+Ich erstelle Ihnen gerne ein detailliertes Konzept für Ihr IPTV CAS System, das die modulare Trennung von Komponenten, insbesondere für das KMS, sowie eine detaillierte Abonnementstruktur mit Basispaketen, Premium-Stufen, PPV und optionalen Add-ons umfasst.
+
+-----
+
+## Komplettes IPTV CAS System Konzept mit Modularisierung und detaillierter Abonnementstruktur
+
+Dieses Konzept beschreibt ein modernes, sicheres und flexibles IPTV Conditional Access System (CAS), das auf einer serviceorientierten Architektur basiert, AES-Verschlüsselung mit ECM/EMM nutzt und erweiterte Abonnementmodelle unterstützt.
+
+### 1\. Architektur-Übersicht: Serviceorientierter Ansatz
+
+Die Architektur setzt auf eine Trennung von Diensten (Microservices oder gut abgegrenzte Module), die über definierte APIs kommunizieren. Dies fördert Skalierbarkeit, Wartbarkeit und Sicherheit.
+
+```
++-------------------+      +-------------------+      +-----------------+
+|                   |      |                   |      |                 |
+|     Client-App    |      |     Web-Portal    |      |    Management   |
+| (STB, Mobile, PC) |      | (Nutzer-Self-Care)|      | (Admin-Backend) |
+|                   |      |                   |      |                 |
++-------------------+      +-------------------+      +-----------------+
+        | (API-Client)             | (API-Client)             | (API-Admin)
+        V                          V                          V
++-----------------------------------------------------------------------+
+|                                API Gateway                             |
+|           (Authentifizierung, Autorisierung, Rate Limiting, Logging)  |
++-----------------------------------------------------------------------+
+        |                                       |
+        | (Service-Calls)                       |
+        V                                       V
++-------------------+    +-----------------+    +-----------------+    +-----------------+
+|                   |    |                 |    |                 |    |                 |
+| Authentifizierungs|    | Abonnement-     |    | Content         |    | Key Management  |
+|    Service        |    | Management      |    | Management      |    | System (KMS)    |
+| (AuthN & AuthZ)   |    |    Service (AMS)|    | Service (CMS)   |    | (Als Modul/Service)|
+| (inkl. HWID-DB)   |    |                 |    |                 |    |                 |
++-------------------+    +-----------------+    +-----------------+    +-----------------+
+        ^                                        |          ^
+        | (Token Validierung)                    |          | (Schlüsselanfrage)
+        |                                        |          |
+        +----------------------------------------+----------+
+        |                                                    |
+        | (Berechtigungsprüfung über AMS)                    |
+        V                                                    V
++-------------------+      +---------------------+      +---------------------+
+|                   |      |                     |      |                     |
+|  CAS Headend      |----->|  EMM Generator      |      |  ECM Generator      |
+|  (Scrambler-Int.) |<-----|  (eigner Service)   |      |  (eigner Service)   |
+|                   |      |                     |      |                     |
++-------------------+      +---------------------+      +---------------------+
+        |                          |                              |
+        | (Scrambled Stream + EMMs)|                              | (Scrambled Stream + ECMs)
+        |                          |                              |
+        V                          V                              V
++-----------------------------------------------------------------------------------+
+|                         IPTV Network / CDN (Distribution Layer)                   |
+|                      (HTTP Live Streaming (HLS) / MPEG-DASH)                      |
++-----------------------------------------------------------------------------------+
+        | (Scrambled Stream, EMMs, ECMs)
+        V
++-------------------+
+|                   |
+|   IPTV Client     | (Entschlüsselung mit CAS-Modul)
+| (STB, App mit CAS |
+|   Modul/Smartcard)|
++-------------------+
+```
+
+### 2\. Modulare Trennung als Eigene Services/Tasks
+
+Jeder der folgenden Punkte sollte als **eigenständiger Service oder ein klar abgegrenztes Modul/Task** innerhalb Ihrer Architektur implementiert werden. Dies fördert die *Loose Coupling*, *High Cohesion*, Skalierbarkeit und die Entwicklung durch getrennte Teams.
+
+#### 2.1. Kern-Backend-Services (als separate Microservices/APIs)
+
+  * **API Gateway:**
+      * **Verantwortung:** Zentraler Einstiegspunkt für alle Client- und externen Admin-Anfragen. Routing, Load Balancing, Basissicherheitsprüfungen (API-Schlüssel, SSL-Termination).
+      * **Trennung:** Agiert als Reverse Proxy und Router, keine eigene Geschäftslogik.
+  * **Authentifizierungs- & Autorisierungsdienst (AuthN & AuthZ Service):**
+      * **Verantwortung:** User-Authentifizierung (Username/Passwort), Token-Generierung (JWT), Session-Management, Geräte-Registrierung/-Verwaltung, HWID-Prüfung.
+      * **Trennung:** Eigenständige Datenbank für Benutzer und registrierte HWIDs. Muss skalierbar sein, um viele Login-Anfragen zu handhaben.
+  * **Abonnement-Management Service (AMS):**
+      * **Verantwortung:** Verwaltung aller Abo-Pakete, Nutzer-Abos (Status, Laufzeit, Rechnungsdaten), Zuordnung von Inhalten/Kanälen zu Paketen.
+      * **Trennung:** Eigene Datenbank für Abonnements. Schnittstellen zu externen Payment-Gateways/Billing-Systemen. Kann auch ein Notification-Service für Abo-Änderungen an andere Dienste (z.B. EMM Generator) beinhalten.
+  * **Content Management Service (CMS):**
+      * **Verantwortung:** Verwaltung aller Metadaten zu Live-Kanälen (EPG-Daten), VOD-Titeln (Titel, Beschreibung, Cover, Genre), Lizenzinformationen, Qualitätsstufen. Zuordnung von Inhalten zu Abo-Paketen.
+      * **Trennung:** Eigene Datenbank für Content-Metadaten. Schnittstellen zu Transcodern/Packagern für Video-Assets und zu Playlistsystemen.
+  * **Key Management System (KMS) - Dringend als eigenständiges, hochsicheres Modul/Service\!**
+      * **Verantwortung:** Die sensibelste Komponente. Generierung, Speicherung, Verwaltung und sichere Bereitstellung aller kryptografischen Schlüssel.
+      * **Details zur Trennung/Modul:**
+          * **Physische Isolation:** Idealerweise auf dedizierter Hardware, die physisch gesichert ist (z.B. in einem Rechenzentrum mit physischem Zugangsschutz).
+          * **Hardware Security Module (HSM):** Unbedingt empfohlen für die Speicherung der Master-Keys und die Durchführung von Schlüsselgenerierungs- und Verschlüsselungsoperationen. Dies schützt vor Software-Angriffen und internen Bedrohungen. Das KMS-Modul interagiert mit dem HSM.
+          * **API-Zugriff:** Ausschließlich über hochgradig gesicherte, authentifizierte und autorisierte APIs (z.B. mTLS, strikte IP-Whitelisting).
+          * **Funktionen:**
+              * `generateControlWord()`: Erzeugt neue CWs (AES-Schlüssel) auf Anfrage (von ECM Generator).
+              * `retrieveCW(cwId)`: Liefert ein spezifisches CW.
+              * `generateCwEncKey(packageId)`: Erzeugt neue CW\_EKs (ECM-Entschlüsselungsschlüssel) für Abo-Pakete.
+              * `retrieveCwEncKey(packageId)`: Liefert CW\_EKs.
+              * `rotateKeys()`: Mechanismen zur automatischen oder manuellen Rotation von CWs und CW\_EKs.
+              * **Audit-Log:** Jede Schlüsselanforderung und -generierung muss lückenlos protokolliert werden.
+          * **Keine direkten User-Zugriffe:** Das KMS kommuniziert ausschließlich mit anderen Backend-Diensten (ECM/EMM Generator).
+
+#### 2.2. CAS Headend-Services (als separate Microservices/APIs)
+
+  * **EMM Generator Service:**
+      * **Verantwortung:** Erzeugt und verwaltet EMMs für individuelle Clients oder Client-Gruppen.
+      * **Trennung:** Eigenständiger Service. Empfängt Daten vom AMS (welcher Nutzer hat welches Abo) und vom KMS (die CW\_EKs). Bietet API zur Übermittlung von EMMs an den Scrambler. Muss Updates von AMS schnell verarbeiten können.
+  * **ECM Generator Service:**
+      * **Verantwortung:** Erzeugt und verwaltet ECMs für spezifische Inhalte und Abonnements.
+      * **Trennung:** Eigenständiger Service. Empfängt Daten vom CMS (welcher Inhalt ist in welchem Paket) und vom KMS (die CWs und CW\_EKs). Bietet API zur Übermittlung von CWs und ECMs an den Scrambler. Muss für jede CW-Rotation schnell neue ECMs generieren.
+  * **Scrambler (Hardware oder Software):**
+      * **Verantwortung:** Verschlüsselt den Medieninhalt mit den CWs (AES). Multiplexiert ECMs und EMMs in den Transportstrom.
+      * **Trennung:** Wird als eine Einheit betrachtet, die über standardisierte Schnittstellen (z.B. DVB Simulcrypt ECMG/EMMG) mit dem ECM/EMM Generator kommuniziert. Die eigentliche MPEG-Kodierung und Playout-Funktion bleibt ausgelagert und kommuniziert über definierte In-/Out-Schnittstellen (z.B. IP/ASI).
+
+### 3\. Detaillierte Abonnementstruktur
+
+Ihre Abonnementstruktur ist essenziell für die Autorisierungslogik in AMS und ECM/EMM Generatoren.
+
+#### 3.1. Abonnement-Pakete
+
+  * **Basispaket:**
+      * **Definition:** Grundlegende Auswahl an Kanälen (z.B. öffentlich-rechtliche Sender, Basiskabelkanäle) und ggf. eine kleine Auswahl an VOD-Inhalten.
+      * **Berechtigung:** Jeder registrierte Nutzer mit einem aktiven Basispaket-Abo erhält die Berechtigungen für diese Inhalte.
+      * **CW\_EK-Zuordnung:** Ein spezifischer CW\_EK wird im KMS für das "Basispaket" generiert. Alle Inhalte im Basispaket werden mit ECMs versehen, die mit diesem CW\_EK entschlüsselt werden können.
+  * **Basispaket+:**
+      * **Definition:** Erweiterung des Basispakets, zusätzliche Kanäle (z.B. weitere private Sender) und eine größere VOD-Bibliothek.
+      * **Berechtigung:** Nutzer erhalten alle Rechte des Basispakets PLUS die zusätzlichen Rechte.
+      * **CW\_EK-Zuordnung:** Kann einen eigenen CW\_EK haben, ODER die Inhalte sind mit mehreren CW\_EKs verschlüsselt (z.B. Basispaket CW\_EK + Basispaket+ CW\_EK), sodass der Client mit *jedem* gültigen CW\_EK entschlüsseln kann, der ihm zur Verfügung steht. Effizienter ist oft ein eigener CW\_EK für "Basispaket+".
+  * **Premium-Paket:**
+      * **Definition:** Alle Inhalte von Basis und Basis+, plus High-End-Kanäle (z.B. exklusive Film-/Serienkanäle) und eine exklusive VOD-Bibliothek (ggf. 4K/HDR-Inhalte).
+      * **Berechtigung:** Umfassendster Zugriff.
+      * **CW\_EK-Zuordnung:** Eigenständiger CW\_EK für "Premium" oder eine Kombination der darunterliegenden CW\_EKs.
+
+#### 3.2. Zusätzliche Optionale Pakete (Add-Ons)
+
+Diese Pakete können **zusätzlich** zu den Basispaketen abonniert werden.
+
+  * **Sport-Paket:**
+      * **Definition:** Exklusive Sportkanäle, Live-Events, Sport-VODs.
+      * **Berechtigung:** Nur wenn "Sport-Paket" zusätzlich abonniert ist.
+      * **CW\_EK-Zuordnung:** Eigener CW\_EK für das Sport-Paket. Inhalte in diesem Paket werden mit ECMs versehen, die mit diesem CW\_EK entschlüsselt werden.
+  * **Film-Paket:**
+      * **Definition:** Premium-Filmkanäle, umfangreiche Film-VOD-Bibliothek.
+      * **Berechtigung:** Nur wenn "Film-Paket" zusätzlich abonniert ist.
+      * **CW\_EK-Zuordnung:** Eigener CW\_EK für das Film-Paket.
+  * **Doku-Paket:**
+      * **Definition:** Dokumentationskanäle, Doku-VODs.
+      * **Berechtigung:** Nur wenn "Doku-Paket" zusätzlich abonniert ist.
+      * **CW\_EK-Zuordnung:** Eigener CW\_EK für das Doku-Paket.
+  * **Kids-Paket:**
+      * **Definition:** Kinderkanäle, kinderfreundliche VODs.
+      * **Berechtigung:** Nur wenn "Kids-Paket" zusätzlich abonniert ist.
+      * **CW\_EK-Zuordnung:** Eigener CW\_EK für das Kids-Paket.
+
+#### 3.3. Pay-Per-View (PPV) / Events
+
+  * **Definition:** Einzelne Inhalte (z.B. ein Boxkampf, ein neuer Kinofilm im VOD) oder einmalige Events, die individuell gekauft werden können, unabhängig von einem Abonnement.
+  * **Berechtigung:** Direkte, zeitlich begrenzte Berechtigung für diesen spezifischen Inhalt nach Kauf.
+  * **CW\_EK-Zuordnung:**
+      * Für PPV/Events wird ein **spezifischer, temporärer CW\_EK** generiert, der nur für dieses Event/diesen Titel gilt.
+      * Wenn ein Nutzer ein PPV/Event kauft, sendet der EMM Generator eine **spezifische EMM an das Gerät des Nutzers**, die ihm diesen temporären CW\_EK bereitstellt.
+      * Der ECM Generator erzeugt dann ECMs für das PPV/Event, die mit diesem CW\_EK verschlüsselt sind.
+      * Nach Ablauf des Events oder der Zugangszeit wird dieser CW\_EK durch eine weitere EMM vom Client entfernt oder als ungültig markiert.
+
+#### 3.4. Implementierung der Abo-Logik im AMS und CAS Headend
+
+  * **AMS:** Muss eine Datenbankstruktur haben, die flexibel genug ist, um Abonnements mit ihren Start-/Enddaten, aktiven optionalen Paketen und individuellen PPV-Käufen zu speichern.
+  * **EMM Generator:**
+      * Fragt beim AMS die **aktiven Abonnements (inkl. PPV-Käufe)** jedes einzelnen Nutzers ab.
+      * Basierend darauf identifiziert er **alle CW\_EKs**, zu denen der Nutzer Zugang hat.
+      * Generiert eine oder mehrere EMMs pro Nutzer/Gerät, die **alle relevanten CW\_EKs** enthalten. Diese EMMs werden dann an den Scrambler zur Verbreitung an die jeweiligen Clients gesendet.
+  * **ECM Generator:**
+      * Fragt beim CMS, zu welchen **Abonnementpaketen** ein bestimmter Kanal/Inhalt gehört.
+      * Fordert vom KMS die **CW\_EKs für alle diese relevanten Pakete** an.
+      * Verschlüsselt das aktuelle Control Word (CW) in separaten ECMs für **jeden dieser CW\_EKs**. D.h., ein Live-Kanal, der im "Basispaket+" und "Premium" verfügbar ist, würde zwei ECMs für das gleiche CW haben (eine mit dem Basispaket+ CW\_EK verschlüsselt, eine mit dem Premium CW\_EK verschlüsselt). Der Client kann dann mit dem CW\_EK entschlüsseln, den er besitzt.
+
+### 4\. Weitere Detaillierungen
+
+  * **API Design:** Definieren Sie RESTful APIs mit klarer URL-Struktur, HTTP-Methoden, Statuscodes und JSON-Payloads. Nutzen Sie OpenAPI/Swagger zur Dokumentation.
+  * **Sicherheits-Layer:**
+      * **Transport Layer Security (TLS):** Ende-zu-Ende-Verschlüsselung für alle API-Kommunikation.
+      * **Mutual TLS (mTLS):** Für kritische Backend-Kommunikation (z.B. zu KMS).
+      * **Authentifizierung:** OAuth2 / JWT für Client-Backend, API-Schlüssel für Service-to-Service.
+      * **Autorisierung:** Granulare Rollen- und Berechtigungskonzepte (RBAC) für API-Zugriffe.
+  * **Datenbanken:** Wählen Sie für jeden Service die geeignete Datenbanktechnologie (z.B. PostgreSQL für relationale Daten, Redis für Caching/Sessions, Cassandra für Zeitreihen/Logs).
+  * **Nachrichtensystem (Message Queue):** Für asynchrone Kommunikation zwischen Services (z.B. RabbitMQ, Kafka) für Events wie "Abonnement geändert" oder "Neues CW generiert".
+  * **Containerisierung (Docker) & Orchestrierung (Kubernetes):** Für Skalierbarkeit, Deployment und Management der Services.
+  * **Observability (Monitoring, Logging, Tracing):** Umfassende Telemetrie für alle Services, um Performance, Fehler und Sicherheitsereignisse zu überwachen.
+
+Dieses Konzept bietet eine detaillierte Blaupause für den Aufbau Ihres IPTV CAS Systems mit Fokus auf Modularität und einer komplexen Abonnementverwaltung. Die Trennung in einzelne, spezialisierte Services ist der Schlüssel für ein robustes und zukunftssicheres System.
