@@ -1,6 +1,6 @@
 import sqlite3
 import threading
-import datetime
+from datetime import datetime
 
 class DBHelper:
     def __init__(self, db_path='iptv_users.db'):
@@ -8,10 +8,13 @@ class DBHelper:
         self.lock = threading.Lock()
         self._create_tables()
 
-    def _create_tables(self):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
+    def _connect(self):
+        return sqlite3.connect(self.db_path, check_same_thread=False)
 
+    def _create_tables(self):
+        with self.lock, self._connect() as conn:
+            c = conn.cursor()
+            # Users table
             c.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     username TEXT PRIMARY KEY,
@@ -22,76 +25,108 @@ class DBHelper:
                     email TEXT
                 )
             ''')
-
+            # Keys table (ECM/EMM)
             c.execute('''
                 CREATE TABLE IF NOT EXISTS keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key TEXT,
-                    valid_until TEXT,
-                    user TEXT,
-                    paket TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    key_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_value TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    valid_until TIMESTAMP,
+                    username TEXT,
+                    paket TEXT
                 )
             ''')
-
+            # Subscriptions table
             c.execute('''
                 CREATE TABLE IF NOT EXISTS subscriptions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT,
                     paket TEXT,
                     start_date TEXT,
                     end_date TEXT,
-                    active INTEGER,
-                    canceled INTEGER DEFAULT 0
+                    active INTEGER
                 )
             ''')
-
+            # Watermarks table
             c.execute('''
                 CREATE TABLE IF NOT EXISTS watermarks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    wm_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT,
-                    filepath TEXT,
+                    path TEXT,
                     position TEXT,
                     visible INTEGER
                 )
             ''')
-
-            conn.commit()
-
-    # Nutzerverwaltung
-    def add_user(self, username, password, hwid, paket, token, email=''):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
+            # Payments table
             c.execute('''
-                INSERT OR REPLACE INTO users (username, password, hwid, paket, token, email)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (username, password, hwid, paket, token, email))
+                CREATE TABLE IF NOT EXISTS payments (
+                    payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT,
+                    amount REAL,
+                    currency TEXT,
+                    status TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
 
-    def get_user_by_token(self, token):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT username, hwid, paket, token, email FROM users WHERE token = ?', (token,))
-            return c.fetchone()
+    # --- User Methods ---
+    def add_user(self, username, password, hwid, paket, token, email=''):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'INSERT OR REPLACE INTO users (username, password, hwid, paket, token, email) VALUES (?, ?, ?, ?, ?, ?)',
+                (username, password, hwid, paket, token, email)
+            )
+            conn.commit()
 
-    def get_user_by_hwid(self, hwid):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT username, hwid, paket, token, email FROM users WHERE hwid = ?', (hwid,))
-            return c.fetchone()
+    def delete_user(self, username):
+        with self.lock, self._connect() as conn:
+            conn.execute('DELETE FROM users WHERE username = ?', (username,))
+            conn.commit()
+
+    def delete_user_by_token(self, token):
+        with self.lock, self._connect() as conn:
+            conn.execute('DELETE FROM users WHERE token = ?', (token,))
+            conn.commit()
+
+    def update_user_details(self, username, paket, hwid, email):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'UPDATE users SET paket = ?, hwid = ?, email = ? WHERE username = ?',
+                (paket, hwid, email, username)
+            )
+            conn.commit()
+
+    def update_user_token(self, username, new_token):
+        with self.lock, self._connect() as conn:
+            conn.execute('UPDATE users SET token = ? WHERE username = ?', (new_token, username))
+            conn.commit()
+
+    def update_user_package(self, username, paket):
+        with self.lock, self._connect() as conn:
+            conn.execute('UPDATE users SET paket = ? WHERE username = ?', (paket, username))
+            conn.commit()
 
     def get_user_by_username(self, username):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT username, hwid, paket, token, email FROM users WHERE username = ?', (username,))
-            return c.fetchone()
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE username = ?',
+                (username,)
+            ).fetchone()
 
-    def get_token_by_username(self, username):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT token FROM users WHERE username = ?', (username,))
-            res = c.fetchone()
-            return res[0] if res else None
+    def get_user_by_token(self, token):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE token = ?',
+                (token,)
+            ).fetchone()
+
+    def get_user_by_hwid(self, hwid):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT username, hwid, paket, token, email FROM users WHERE hwid = ?',
+                (hwid,)
+            ).fetchone()
 
     def list_users(self, paket_filter=None, hwid_filter='', token_filter=''):
         query = 'SELECT username, hwid, paket, token, email FROM users WHERE 1=1'
@@ -105,236 +140,136 @@ class DBHelper:
         if token_filter:
             query += ' AND token LIKE ?'
             params.append(f'%{token_filter}%')
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute(query, params)
-            return c.fetchall()
-
-    def update_user_token(self, username, token):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('UPDATE users SET token = ? WHERE username = ?', (token, username))
-            conn.commit()
-
-    def update_user_package(self, username, paket):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('UPDATE users SET paket = ? WHERE username = ?', (paket, username))
-            conn.commit()
-
-    def update_user_details(self, username, paket, hwid, email):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('UPDATE users SET paket = ?, hwid = ?, email = ? WHERE username = ?', (paket, hwid, email, username))
-            conn.commit()
-
-    def delete_user(self, username):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('DELETE FROM users WHERE username = ?', (username,))
-            conn.commit()
+        with self.lock, self._connect() as conn:
+            return conn.execute(query, params).fetchall()
 
     def get_all_users(self):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT username, hwid, paket, token, email FROM users')
-            return c.fetchall()
+        with self.lock, self._connect() as conn:
+            return conn.execute('SELECT username, hwid, paket, token, email FROM users').fetchall()
 
-    # Wasserzeichen
-    def add_watermark(self, name, filepath, position, visible=True):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
+    # --- Key Methods ---
+    def store_key(self, key_value, valid_until=None, username=None, paket=None):
+        with self.lock, self._connect() as conn:
             c = conn.cursor()
-            c.execute('INSERT INTO watermarks (name, filepath, position, visible) VALUES (?, ?, ?, ?)',
-                      (name, filepath, position, 1 if visible else 0))
-            conn.commit()
-
-    def get_watermarks(self):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT id, name, filepath, position, visible FROM watermarks')
-            return c.fetchall()
-
-    def update_watermark(self, wm_id, visible=None, position=None, name=None):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            updates = []
-            params = []
-            if visible is not None:
-                updates.append('visible = ?')
-                params.append(1 if visible else 0)
-            if position is not None:
-                updates.append('position = ?')
-                params.append(position)
-            if name is not None:
-                updates.append('name = ?')
-                params.append(name)
-            if not updates:
-                return
-            params.append(wm_id)
-            sql = 'UPDATE watermarks SET ' + ', '.join(updates) + ' WHERE id = ?'
-            c.execute(sql, params)
-            conn.commit()
-
-    # Schlüssel (ECM/EMM)
-    def store_key(self, key, valid_until, user, paket):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('INSERT INTO keys (key, valid_until, user, paket) VALUES (?, ?, ?, ?)', (key, valid_until, user, paket))
+            c.execute(
+                'INSERT INTO keys (key_value, valid_until, username, paket) VALUES (?, ?, ?, ?)',
+                (key_value, valid_until, username, paket)
+            )
             conn.commit()
             return c.lastrowid
 
-    def get_keys(self, limit=50):
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT id, key, valid_until, user, paket, created_at FROM keys ORDER BY created_at DESC LIMIT ?', (limit,))
-            return c.fetchall()
+    def get_key_by_id(self, key_id):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT key_id, key_value, valid_until, username, paket FROM keys WHERE key_id = ?',
+                (key_id,)
+            ).fetchone()
+
+    def get_valid_keys(self, username=None, paket=None):
+        query = 'SELECT key_id, key_value FROM keys WHERE valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP'
+        params = []
+        if username:
+            query += ' AND username = ?'
+            params.append(username)
+        if paket:
+            query += ' AND paket = ?'
+            params.append(paket)
+        with self.lock, self._connect() as conn:
+            return conn.execute(query, params).fetchall()
+
+    def get_recent_keys(self, limit=10):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT key_id, key_value, created_at, username, paket FROM keys ORDER BY created_at DESC LIMIT ?',
+                (limit,)
+            ).fetchall()
 
     def get_valid_key_for_user(self, username):
-        jetzt = datetime.datetime.utcnow().isoformat()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('SELECT key FROM keys WHERE user = ? AND valid_until >= ? ORDER BY valid_until DESC LIMIT 1', (username, jetzt))
-            row = c.fetchone()
-            return row[0] if row else None
+        recs = self.get_valid_keys(username=username)
+        return recs[0][1] if recs else None
 
-    def get_valid_keys_for_user(self, username):
-        jetzt = datetime.datetime.utcnow().isoformat()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('''
-                SELECT DISTINCT k.key FROM keys k
-                JOIN subscriptions s ON k.user = s.username AND k.paket = s.paket
-                WHERE k.user = ? 
-                  AND s.active = 1
-                  AND (s.canceled = 0 OR (s.canceled = 1 AND DATE(s.end_date) >= DATE(?)))
-                  AND DATE(s.end_date) >= DATE(?)
-                  AND k.valid_until >= ?
-            ''', (username, jetzt, jetzt, jetzt))
-            rows = c.fetchall()
-            return [row[0] for row in rows] if rows else []
-
-    # Abonnement mit Upgrade/Downgrade Logik
-    def add_or_upgrade_subscription(self, username, paket, zyklus_tage):
-        heute = datetime.datetime.utcnow().date()
-        paket_prioritaet = {'Basis': 1, 'Basis+': 2, 'Premium': 3}
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-
-            # Alle aktiven Abos holen
-            c.execute('''
-                SELECT id, paket, start_date, end_date FROM subscriptions
-                WHERE username = ? AND active = 1 AND canceled = 0
-            ''', (username,))
-            aktive_abos = c.fetchall()
-
-            # Höchstes Paket finden
-            current_highest = None
-            for abo in aktive_abos:
-                if not current_highest or paket_prioritaet[abo[1]] > paket_prioritaet[current_highest[1]]:
-                    current_highest = abo
-
-            if current_highest:
-                if paket_prioritaet[paket] > paket_prioritaet[current_highest[1]]:
-                    # Neues Paket höherwertig: neues Paket sofort aktiv, altes Abo deaktivieren
-                    start_date = heute.isoformat()
-                    end_date = heute + datetime.timedelta(days=zyklus_tage)
-                    c.execute('UPDATE subscriptions SET active = 0 WHERE id = ?', (current_highest[0],))
-                    c.execute('''
-                        INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
-                        VALUES (?, ?, ?, ?, 1, 0)
-                    ''', (username, paket, start_date, end_date.isoformat()))
-                elif paket_prioritaet[paket] == paket_prioritaet[current_highest[1]]:
-                    # Gleiches Paket verlängern
-                    c.execute('''
-                        SELECT id, end_date FROM subscriptions
-                        WHERE username = ? AND paket = ? AND active = 1 AND canceled = 0
-                    ''', (username, paket))
-                    row = c.fetchone()
-                    if row:
-                        abo_id, end_date_str = row
-                        end_date = datetime.datetime.fromisoformat(end_date_str).date()
-                        neuer_ablauf = end_date + datetime.timedelta(days=zyklus_tage)
-                        c.execute('UPDATE subscriptions SET end_date = ? WHERE id = ?', (neuer_ablauf.isoformat(), abo_id))
-                    else:
-                        start_date = heute.isoformat()
-                        end_date = heute + datetime.timedelta(days=zyklus_tage)
-                        c.execute('''
-                            INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
-                            VALUES (?, ?, ?, ?, 1, 0)
-                        ''', (username, paket, start_date, end_date.isoformat()))
-                else:
-                    # Niedrigeres Paket planen (active=0, startet nach Ablauf des höchsten Pakets)
-                    end_date_str = current_highest[3]
-                    start_date = datetime.datetime.fromisoformat(end_date_str).date() + datetime.timedelta(days=1)
-                    end_date = start_date + datetime.timedelta(days=zyklus_tage)
-                    c.execute('''
-                        INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
-                        VALUES (?, ?, ?, ?, 0, 0)
-                    ''', (username, paket, start_date.isoformat(), end_date.isoformat()))
-            else:
-                # Kein aktives Abo: neues Abo sofort aktiv anlegen
-                start_date = heute.isoformat()
-                end_date = heute + datetime.timedelta(days=zyklus_tage)
-                c.execute('''
-                    INSERT INTO subscriptions (username, paket, start_date, end_date, active, canceled)
-                    VALUES (?, ?, ?, ?, 1, 0)
-                ''', (username, paket, start_date, end_date.isoformat()))
-
+    # --- Subscription Methods ---
+    def add_subscription(self, username, paket, start_date, end_date):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'INSERT INTO subscriptions (username, paket, start_date, end_date, active) VALUES (?, ?, ?, ?, 1)',
+                (username, paket, start_date, end_date)
+            )
             conn.commit()
 
-    def cancel_subscription(self, username, paket=None):
-        heute = datetime.datetime.utcnow().date().isoformat()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            if paket:
-                c.execute('''
-                    UPDATE subscriptions
-                    SET canceled = 1
-                    WHERE username = ? AND paket = ? AND active = 1 AND canceled = 0 AND DATE(end_date) > DATE(?)
-                ''', (username, paket, heute))
-            else:
-                c.execute('''
-                    UPDATE subscriptions
-                    SET canceled = 1
-                    WHERE username = ? AND active = 1 AND canceled = 0 AND DATE(end_date) > DATE(?)
-                ''', (username, heute))
+    def cancel_subscription(self, username):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'UPDATE subscriptions SET active = 0 WHERE username = ? AND active = 1',
+                (username,)
+            )
             conn.commit()
+
+    def get_active_subscription(self, username):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT sub_id, username, paket, start_date, end_date, active '
+                'FROM subscriptions WHERE username = ? AND active = 1 '
+                'ORDER BY end_date DESC LIMIT 1',
+                (username,)
+            ).fetchone()
 
     def get_active_subscriptions(self, username):
-        heute = datetime.datetime.utcnow().date()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('''
-                SELECT id, paket, start_date, end_date, canceled, active FROM subscriptions
-                WHERE username = ? AND (active = 1 OR (active = 0 AND canceled = 0))
-                  AND DATE(end_date) >= DATE(?)
-                ORDER BY end_date DESC
-            ''', (username, heute.isoformat()))
-            return c.fetchall()
-
-    def has_active_subscription(self, username):
-        heute = datetime.datetime.utcnow().date()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute('''
-                SELECT COUNT(*) FROM subscriptions
-                WHERE username = ? AND active = 1 AND canceled = 0 AND DATE(end_date) >= DATE(?)
-            ''', (username, heute.isoformat()))
-            result = c.fetchone()
-            return result[0] > 0 if result else False
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT sub_id, username, paket, start_date, end_date, active '
+                'FROM subscriptions WHERE username = ? AND active = 1',
+                (username,)
+            ).fetchall()
 
     def get_best_active_package(self, username):
-        paket_prioritaet = {'Kein Abo': 0, 'Basis': 1, 'Basis+': 2, 'Premium': 3}
-        heute = datetime.datetime.utcnow().date()
-        with self.lock, sqlite3.connect(self.db_path) as conn:
+        subs = self.get_active_subscriptions(username)
+        priority = {'Premium': 3, 'Basis+': 2, 'Basis': 1, 'Kein Abo': 0}
+        best = 'Kein Abo'
+        for s in subs:
+            paket = s[2]
+            if priority.get(paket, 0) > priority.get(best, 0):
+                best = paket
+        return best
+
+    # --- Watermark Methods ---
+    def add_watermark(self, name, path, position, visible=True):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'INSERT INTO watermarks (name, path, position, visible) VALUES (?, ?, ?, ?)',
+                (name, path, position, int(visible))
+            )
+            conn.commit()
+
+    def get_watermarks(self):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT wm_id, name, path, position, visible FROM watermarks'
+            ).fetchall()
+
+    def update_watermark(self, wm_id, visible):
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                'UPDATE watermarks SET visible = ? WHERE wm_id = ?',
+                (int(visible), wm_id)
+            )
+            conn.commit()
+
+    # --- Payment Methods ---
+    def add_payment(self, username, amount, currency, status):
+        with self.lock, self._connect() as conn:
             c = conn.cursor()
-            c.execute('''
-                SELECT paket, start_date, end_date, canceled, active FROM subscriptions
-                WHERE username = ? AND active = 1 AND canceled = 0 AND DATE(end_date) >= DATE(?)
-            ''', (username, heute.isoformat()))
-            abos = c.fetchall()
-            if not abos:
-                return 'Kein Abo'
-            # Höchste Priorität wählen
-            bestes = max(abos, key=lambda a: paket_prioritaet.get(a[0], 0))
-            return bestes[0]
+            c.execute(
+                'INSERT INTO payments (username, amount, currency, status) VALUES (?, ?, ?, ?)',
+                (username, amount, currency, status)
+            )
+            conn.commit()
+            return c.lastrowid
+
+    def get_payments_by_user(self, username):
+        with self.lock, self._connect() as conn:
+            return conn.execute(
+                'SELECT payment_id, amount, currency, status, timestamp '
+                'FROM payments WHERE username = ?',
+                (username,)
+            ).fetchall()

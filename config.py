@@ -7,10 +7,11 @@ PORT_ADMIN = 5000        # Port für Admin-Dashboard (admin_dashboard.py)
 PORT_SELF_SERVICE = 7000 # Port für Self-Service-Portal (self_service.py)
 PORT_PAYMENT_API = 7070  # Port für Payment-API (payment_api.py)
 PORT_CAS_API = 5555
+PORT_ADMIN_DASHBOARD = 5050  # Oder dein gewünschter Port für das Admin Dashboard
 # Sicherheits-Keys (im Produktivbetrieb ändern!)
 MASTER_KEY = "supersecretmasterkey123"
 API_SECRET_KEY = "supersecretapikey123"
-
+ADMIN_PASSWORD = "dein_sicheres_passwort"
 # Datenbank
 DB_PATH = "iptv_users.db"
 
